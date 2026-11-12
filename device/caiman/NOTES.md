@@ -1,0 +1,144 @@
+<!-- SPDX-License-Identifier: MIT -->
+# Pixel 9 Pro (caiman) bring-up notes
+
+Findings for the Google Pixel 9 Pro port (`caiman`, SoC `zumapro`, Tensor G4), newest first. Nothing here has booted or flashed anything of ours: stage 0 is strictly read-only. `caiman` shares the `zumapro` SoC with the [Pixel 9a (`tegu`)](../tegu/NOTES.md).
+
+The sections below are a fact record. Every fact printed by a tool is marked `[V]` with its source (`F/`, `R/`, `G/`, or `K/`). Every inference, hypothesis, and open question is kept out of the fact sections and collected in "Interpretation and open questions" at the end (`I1` to `I12`).
+
+**This phone runs untouched stock Android.** It is a dedicated spare retail Pixel 9 Pro running Google's official Android 17 build `CP3A.261005.005` (`16271449`) with a locked bootloader and without root. Four sources are separated throughout:
+
+- `F/`: Google's official factory package `caiman-cp3a.261005.005-factory-6c37847c.zip` (SHA-256 `6c37847c9db3601e1228b48a08e7124af24f0fe936a36c2eada98c28abfe144c`) and full OTA `caiman-ota-cp3a.261005.005-9eef9468.zip` (SHA-256 `9eef946868ce133a507e6c626299923db7561f016aa34bca6c212623bb2d0e79`), verified against Google's published hashes and inspected offline on the host.
+- `R/`: read-only `adb` and `fastboot` queries of the retail phone by exact property or variable name (never a bare `getprop` dump, never `fastboot getvar all`, no shell writes). Raw output lists remain in private reference storage outside the repository; no serial, IMEI, MAC address, or partition image is stored here.
+- `G/`: Google's GPL `caimito` kernel device-tree repository (`android.googlesource.com/kernel/devices/google/caimito` at commit `38a058681d6cefbb95200dc8a5348939773eb9d6` on `android-gs-caimito-6.1-android16`).
+- `K/`: `arch/arm64/boot/dts/exynos/google/{zumapro.dtsi,zumapro-reserved-memory.dtsi,zumapro-tegu.dts}` on the `omamobile` branch of [linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile), used as the reference for the `zumapro` comparison in part 5.
+
+## How this was produced
+
+**AI assistance.** This file was written with AI assistance (Gemini, through Antigravity). The contributor connected the dedicated test phone, approved every read-only `adb` and `fastboot` transition, and verified the carrier-unlock status on the handset. The read-only host queries, factory-image unpacking, device-tree decompilation, and cross-checks were executed by the AI agent, and the synthesis in "Interpretation and open questions" is the agent's. Anyone can reproduce every `[V]` line with the commands below.
+
+**Tools** (macOS `arm64` host): Android `platform-tools` 37.0.1 (`adb`, `fastboot`), AOSP pinned tools from `tools/toolchain.lock` (`unpack_bootimg.py` `4a27dd13adf9`, `mkdtboimg.py` `70c20864187d`, `avbtool.py` 1.4.0 `ba2dec4b035b`), `dtc` and `fdtoverlay` 1.7.2 built from `linux-omarchy-mobile`'s `scripts/dtc`, `unzip`, and Python 3 (to split concatenated DTBs and decompress the LZ4 legacy kernel image). Nothing from Google's archives is committed here.
+
+**Offline factory-image commands** (`F/`, parts 1, 4, and 5):
+
+```
+shasum -a 256 -c SHA256SUMS                           # factory and OTA zips against Google's page
+unzip -l caiman-cp3a.261005.005-factory-6c37847c.zip  # outer and inner image-*.zip inventory
+unpack_bootimg.py --boot_img <img.img> --out <dir>    # v4 headers, ramdisks, cmdline, bootconfig, dtb
+avbtool.py info_image --image <img.img>               # rollback indices, flags, chain/hash descriptors
+mkdtboimg.py dump dtbo.img -b entry                   # 60 board dtbo entries
+dtc -I dtb -O dts -q -o 06.dts 06.dtb                 # decompile split base DTBs (0xd00dfeed magic)
+fdtoverlay -i 06.dtb -o merged_06_49.dtb entry.49     # merge FOPLP A0/A1 base DTB with caiman MP overlay
+```
+
+**Read-only phone commands** (`R/`, parts 2, 3, and 4):
+
+```
+adb shell getprop <name>               # named build/hardware properties only; never bare getprop
+adb shell cat /proc/version            # plus CPU part counts from /proc/cpuinfo and MemTotal
+adb shell ls -l /dev/block/by-name     # partition names and LUN block targets
+adb shell find /proc/device-tree -type d  # directory/node names only; SELinux denies property reads
+fastboot getvar <name>                 # named variables only; never fastboot getvar all
+fastboot flashing get_unlock_ability
+```
+
+## 2026-11-12: stage 0, part 5: caiman's merged factory tree against `zumapro` in `linux-omarchy-mobile`
+
+Compared offline from `merged_06_49.dts` (`F/`, Base DTB `06` merged with `dtbo` entry `49`), cross-checked against `G/` and against `zumapro.dtsi`, `zumapro-reserved-memory.dtsi`, and `zumapro-tegu.dts` (`K/`).
+
+- **All 33 fixed `reserved-memory` ranges match `zumapro-reserved-memory.dtsi`** `[V]` (`F/` vs `K/`). `merged_06_49.dts` defines 47 `reserved-memory` children: 33 fixed `reg` regions (26 with `no-map` and 7 without: `cp_aoc_rmem`, `ect_binary`, `seclog_mem`, `cp_rmem_1`, `cp_rmem`, `cp_msi_rmem`, `ramoops_mem@fd3ff000`) plus 14 dynamic pools without `reg`. Every one of the 33 fixed ranges matches the exact base address and byte size of its counterpart in `K/` `zumapro-reserved-memory.dtsi` (`0x17bb5000+0xb000` through `0xfd800000+0x100000`); `K/` additionally holds its two conservative gap reservations (`gxp-gap@913a0000` and `debug-tail@fd7ff000`).
+- **Peripherals and pinouts identical to `zumapro-tegu.dts`** `[V]` (`F/` `merged_06_49.dts` vs `K/` `zumapro-tegu.dts`):
+  - **Buttons (`gpio_keys`)**: Power `gpa4-0` (`KEY_POWER`), Volume Down `gpa4-1` (`KEY_VOLUMEDOWN`), Volume Up `gpa6-2` (`KEY_VOLUMEUP`), all active-low wakeup sources.
+  - **UFS (`ufs@13200000`)**: 2 lanes, HS-G4, `ufs-vcc` fixed regulator switched by `gpp0-1` active high.
+  - **Touchscreen (`spi@111D0000/touchscreen@0`)**: `compatible = "synaptics,tcm-spi"` on HSI2 `usi2_hsi0` (`spi20`), `reg = <0>`, `spi-max-frequency = <10000000>`, interrupt `gpn0-0` level-low, reset `gpp1-1` active-low, `vdd-supply` on `S2MPG14_LDO25`, `avdd-supply` on `S2MPG14_LDO4` (`I5`).
+  - **PMICs (`s2mpg14mfd@0`, `s2mpg15mfd@0`)**: on `acpm_mfd_bus@15500000` (`reg = <0x1f>`) and `acpm_mfd_bus@15510000` (`reg = <0x2f>`).
+  - **Companion PMIC, fuel gauge, charger, and TCPC (`hsi2c@108D0000`)**: `max77779pmic@66`, `max77779chrg@69`, `max77779fg@36`, `max77779sp@60`, `max77779vimon@28`, and `max77759tcpc@25`.
+  - **Haptics (`hsi2c@10C90000/cs40l26a@43`)**: Cirrus `cirrus,cs40l26a`, reset `gph2-3` active-low, interrupt `gpa6-3`.
+  - **Rear torch (`flash@0` on `hsi2c@108B0000`)**: `flash-lm3644` at `0x63`, `enable-gpios` on `gpp24-1`.
+  - **NFC and eSE**: `st,st21nfc` at `0x08` on `hsi2c@10C90000` (reset `gph1-6`, IRQ `gpa7-5`, `pidle` `gph1-3`, `pmu_clk_pad = <0x3e84>`) and `st,st54spi` on `spi@10CE0000`.
+  - **Wi-Fi / Bluetooth host wiring**: PCIe channel 1 (`pcie@13120000`) with `WL_REG_ON` (`cfg_wlanen`) on `gph3-4`; Bluetooth (`goog,nitrous`) with `shutdown-gpios` `gpn8-0`, `device-wakeup-gpios` `gpn9-0`, `bt-ble-dbo-le-gpios` `gpp24-3`, `host-wakeup-gpios` `gpa5-6`, `timesync-gpios` `gpp11-1`.
+- **Peripherals that differ from `tegu`** `[V]` (`F/` `merged_06_49.dts`, `R/` `/vendor/lib/modules`):
+  - **SoC package**: FOPLP (`pkg_mode = <0>`), where `tegu` uses IPOP (`pkg_mode = <1>`) (parts 1 and 4).
+  - **Display panel (`gs-drm-connector/panel@0`)**: `compatible = "google,gs-cm4"` (`label = "google-cm4"`, vendor module `panel-google-cm4.ko`), native `dsim_modes` mode `1280x2856` (with `960x2142`, `1080x1920`, and `720x1280` modes also listed; `bts_scen_min_panel_width = <0x500>`, `bts_scen_min_panel_height = <0xb28>`), `reset-gpios` `gpp0-0`, `disp_vddd` fixed regulator on `gpp21-4`, `vddd-gpios` `gpp21-5`, `vddi-supply` `S2MPG15_BUCKA`, `vci-supply` `S2MPG14_LDO14` (`I6`).
+  - **Speaker amplifiers (`spi@111C0000/cs35l41@0` and `cs35l41@1`)**: two Cirrus `cirrus,cs35l41` amplifiers over SPI at 25 MHz (`cs35l41@0`: CS 0, reset `gpp6-3`, IRQ `gpa5-5`; `cs35l41@1`: CS 1, `sound-name-prefix = "R"`, reset `gph2-1`, IRQ `gpa7-2`; `VA-supply` `S2MPG15_BUCKA`), rather than `tegu`'s I2C `TAS2572` (`I7`).
+  - **Wi-Fi / Bluetooth silicon**: Broadcom `BCM4390` (`bcmdhd4390.ko`, `wlan-device` compatible `"android,bcmdhd_wlan-wonder"`), rather than `tegu`'s `BCM4383` (`I8`).
+  - **Modem and GNSS**: Samsung Exynos `s5400` (`version-baseband` `g5400c-...`) over `pcie@12100000` with `samsung,exynos-cp` (`cpif`), `samsung,exynos-gnss`, and `spi@111E0000/gnss@0` (`samsung,gnss-spi`) (`I9`).
+  - **Fingerprint (`odm/qcom,qbt-handler`)**: Qualcomm ultrasonic sensor (`qbt_handler.ko`, `compatible = "qcom,qbt-handler"`, `qcom,ipc-gpio` and interrupt on `gpa7-6`), rather than `tegu`'s optical Goodix sensor (`I10`).
+  - **UWB (`spi@111B0000/qm35@0`)**: Qorvo `qorvo,qm35` (`qm35_spi.ko`).
+  - **Cameras**: four LWIS I2C sensor nodes: `sensor-boitata` (`0x3d` on `hsi2c@108C0000`, reset `gpp10-2`), `sensor-taotie-front` (`0x1a` on `hsi2c@108A0000`, reset `gpp6-2`), `sensor-taotie-uw` (`0x1a` on `hsi2c@10890000`, reset `gpp4-2`), and `sensor-taotie-tele` (`0x33` on `hsi2c@10880000`, reset `gpp2-2`) (`I11`).
+
+## 2026-11-12: stage 0, part 4: live device-tree directory names against the factory tree
+
+Read over `adb` without root on the stock phone `[V]` (`R/`). SELinux denies reading property files under `/proc/device-tree` (`Permission denied`), including `/chosen`, but directory names and their unit addresses are world-listable.
+
+- **Live `/soc_compatible` proves Base DTB `06` (FOPLP)** `[V]` (`R/` vs `F/`). `/proc/device-tree/soc_compatible` contains two subdirectories: `A0_FOPLP` and `A1_FOPLP`. Of the eight base DTBs in `F/` `vendor_kernel_boot` (part 1), only Base DTB `06` carries both `A0_FOPLP` and `A1_FOPLP` (`product_id = <0x9875>`, `major = <0>`, `minor = <0>` and `<1>`, `pkg_mode = <0>`). Base DTB `04` carries only `A0_FOPLP`, and Base DTBs `05` and `07` carry `*_IPOP` (`I3`). For `device.conf`, this gives `SOC_COMPATIBLE="a0-foplp:0x9875:0:0:0 a1-foplp:0x9875:0:1:0"`.
+- **726 live top-level nodes vs. 718 in `merged_06_49`** `[V]` (`R/` vs `F/`). Every one of the 718 top-level nodes in `merged_06_49` is present on the phone (`0` missing). The bootloader adds 8 top-level nodes: `avf` and seven upper RAM bank nodes (`memory@880000000`, `memory@900000000`, `memory@980000000`, `memory@a00000000`, `memory@a80000000`, `memory@b00000000`, `memory@b80000000`) alongside `memory@80000000` from the base tree, making eight RAM banks in total (`I2`).
+- **51 live `reserved-memory` children vs. 47 in `merged_06_49`** `[V]` (`R/` vs `F/`). Every one of the 47 children in `merged_06_49` is present live (`0` missing). The bootloader inserts four additional reservations: `abl@f8800000`, `pkvm_guest_firmware`, `sec_dram`, and `sec_pt`. No `reserved-memory` child is named like a display splash carve-out (`I6`).
+
+## 2026-11-12: stage 0, part 3: named `fastboot` variables and slot state
+
+Queried read-only in Fastboot Mode by exact variable name with the owner's approval, then rebooted cleanly back to stock Android `[V]` (`R/`).
+
+- **Bootloader and lock state** `[V]`: `product` is `caiman`, `hw-revision` is `MP1.0`, `version-bootloader` is `ripcurrentpro-17.0-15819938`, `version-baseband` is `g5400c-260604-260807-B-16035863`, `secure` is `yes`, `unlocked` is `no`, `current-slot` is `b`, `slot-count` is `2`, and `fastboot flashing get_unlock_ability` returned `0` ("OEM unlocking" had not yet been switched on in Android Settings; carrier-unlock eligibility was separately confirmed on the handset, `I12`).
+- **Slot flags — Slot A is currently flagged unbootable** `[V]`:
+
+  | Slot | `slot-successful` | `slot-retry-count` | `slot-unbootable` |
+  | --- | --- | --- | --- |
+  | A | yes | 2 | **yes** |
+  | B | yes | 2 | no |
+
+  Because Omarchy Mobile writes only Slot B and relies on Slot A as an untouched, bootable stock Android fallback (CONTRIBUTING.md §3.1, §3.4), **Slot B must not be flashed in this phone's current state**. Before unlocking or installing anything, `caiman-ota-cp3a.261005.005-9eef9468.zip` (`F/`) must be sideloaded from stock recovery so Slot A receives `CP3A.261005.005` and `ripcurrentpro-17.0-15819938`, boots stock Android cleanly, and clears `slot-unbootable:a` (`I4`).
+- **Exact partition sizes (`*_a` and `*_b` are equal)** `[V]`:
+  - `boot_a`, `boot_b`: `0x4000000` (67,108,864 bytes; 64 MiB)
+  - `init_boot_a`, `init_boot_b`: `0x800000` (8,388,608 bytes; 8 MiB)
+  - `vendor_boot_a`, `vendor_boot_b`: `0x4000000` (67,108,864 bytes; 64 MiB)
+  - `vendor_kernel_boot_a`, `vendor_kernel_boot_b`: `0x4000000` (67,108,864 bytes; 64 MiB)
+  - `dtbo_a`, `dtbo_b`: `0x1000000` (16,777,216 bytes; 16 MiB)
+  - `vbmeta_a`, `vbmeta_b`: `0x10000` (65,536 bytes; 64 KiB)
+  - `userdata` (`has-slot:userdata: no`): `0x1b5e215000` (117,543,358,464 bytes; 109.5 GiB)
+
+## 2026-11-12: stage 0, part 2: read-only properties and partition map from stock Android
+
+Read over `adb` by exact property and path name `[V]` (`R/`).
+
+- **Identity and build** `[V]`: `ro.product.device` = `caiman`, `ro.product.model` = `Pixel 9 Pro`, `ro.boot.hardware.sku` = `GR83Y`, `ro.boot.hardware.revision` = `MP1.0`, `ro.boot.hardware.platform` = `zumapro`, `ro.soc.model` = `Tensor G4`, `ro.build.id` = `CP3A.261005.005`, `ro.build.version.incremental` = `16271449`, `ro.build.version.release` = `17`, `ro.build.version.security_patch` = `2026-10-05`, `ro.bootloader` = `ripcurrentpro-17.0-15819938`, `ro.boot.slot_suffix` = `_b`, `ro.boot.dtbo_idx` = `49`, `ro.boot.dtb_idx` = empty.
+- **Running kernel** `[V]`: `Linux version 6.1.162-android14-11-g9dd05ae3a1de-ab16261587`, built `Thu Sep 3 03:59:00 UTC 2026` with Android clang 17.0.2 (`r487747c`), identical to the kernel inside `F/` `boot.img` (part 1).
+- **CPUs and memory** `[V]`: eight Arm cores (`0x41`): four `0xd80`, three `0xd81`, and one `0xd82` (`I1`). `MemTotal` is `15456904 kB` (`I2`).
+- **Partition layout (`/dev/block/by-name`, 66 entries across 4 UFS LUNs)** `[V]`:
+  - **`sda` (main LUN, 34 partitions)**: unslotted `persist` (`sda1`), `klog` (`sda2`), `misc` (`sda3`), `frp` (`sda4`), `efs` (`sda5`), `efs_backup` (`sda6`), `modem_userdata` (`sda7`), `trusty_persist` (`sda8`), `trusty_userdata` (`sda9`), `metadata` (`sda10`), `fips` (`sda11`), `ufs_internal` (`sda12`), `super` (`sda33`), `userdata` (`sda34`); Slot A `boot_a` (`sda13`), `init_boot_a` (`sda14`), `vendor_boot_a` (`sda15`), `vendor_kernel_boot_a` (`sda16`), `dtbo_a` (`sda17`), `vbmeta_a` (`sda18`), `vbmeta_system_a` (`sda19`), `vbmeta_vendor_a` (`sda20`), `pvmfw_a` (`sda21`), `modem_a` (`sda22`); Slot B `boot_b` (`sda23`), `init_boot_b` (`sda24`), `vendor_boot_b` (`sda25`), `vendor_kernel_boot_b` (`sda26`), `dtbo_b` (`sda27`), `vbmeta_b` (`sda28`), `vbmeta_system_b` (`sda29`), `vbmeta_vendor_b` (`sda30`), `pvmfw_b` (`sda31`), `modem_b` (`sda32`).
+  - **`sdb` and `sdc` (Slot A and Slot B boot LUNs, 12 partitions each)**: `bl1`, `pbl`, `bl2`, `dram_train`, `abl`, `bl31`, `tzsw`, `gsa`, `gsa_bl1`, `ldfw`, `dpm`, `gcf` (`_a` on `sdb1..12`, `_b` on `sdc1..12`).
+  - **`sdd` (per-device LUN, 4 partitions)**: `devinfo` (`sdd1`), `pinfo` (`sdd2`), `blenv` (`sdd3`), `mfg_data` (`sdd4`).
+  - For the descriptor, this gives `BOOT_IMAGES="boot init_boot vendor_boot vendor_kernel_boot dtbo"`, `UFS_RW="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"`, `NV_PARTS="efs efs_backup modem_userdata persist modem_a modem_b"`, and `NV_BACKUP_EXTRA="devinfo metadata trusty_persist trusty_userdata"`.
+
+## 2026-11-12: stage 0, part 1: Google's factory and OTA packages
+
+Inspected offline from `caiman-cp3a.261005.005-factory-6c37847c.zip` (4,311,253,458 bytes) and `caiman-ota-cp3a.261005.005-9eef9468.zip` (3,382,425,998 bytes) `[V]` (`F/`).
+
+- **Required firmware (`android-info.txt` and OTA metadata)** `[V]`: `require board=ripcurrentpro|ripcurrent24|caiman|komodo|tokay`, `require version-bootloader=ripcurrentpro-17.0-15819938`, `require version-baseband=g5400c-260604-260807-B-16035863`. The outer zip ships `bootloader-caiman-ripcurrentpro-17.0-15819938.img`, `radio-caiman-g5400c-260604-260807-b-16035863.img`, three 1 MiB `*.ec.bin` files (`d3m2`, `proto11`, `evt`), and `image-caiman-cp3a.261005.005.zip`. The full OTA carries `ota-type=AB`, `pre-device=caiman` (no `pre-build`), `post-build=google/caiman/caiman:17/CP3A.261005.005/16271449:user/release-keys`, `post-security-patch-level=2026-10-05`.
+- **Boot image headers (`unpack_bootimg.py`)** `[V]`:
+  - `boot.img` (64 MiB): Android boot header v4, LZ4-legacy compressed kernel (`16,637,222` bytes compressed, `35,637,760` bytes uncompressed, `Linux version 6.1.162-android14-11-g9dd05ae3a1de-ab16261587`), ramdisk size `0`, OS version/patch `None`, empty command line. (The inner zip also carries standalone `kernel_16k` and `ramdisk_16k.img`.)
+  - `init_boot.img` (8 MiB): Android boot header v4, kernel size `0`, generic ramdisk `2,690,140` bytes, `os version: 17.0.0`, `os patch level: 2026-10`, empty command line.
+  - `vendor_boot.img` (64 MiB): VNDRBOOT header v4, `page size: 0x00000800`, `dtb size: 0`, two vendor ramdisks (`vendor_ramdisk00` type `0x1` unnamed `23,971,580` bytes; `vendor_ramdisk01` type `0x0` named `16K` `16,929,631` bytes), `vendor bootconfig` `androidboot.load_modules_parallel=true` and `androidboot.boot_devices=13200000.ufs`, and vendor command line including `earlycon=exynos4210,0x10870000 console=ttySAC0,115200 androidboot.console=ttySAC0 ... bootconfig`.
+  - `vendor_kernel_boot.img` (64 MiB): VNDRBOOT header v4, `page size: 0x00000800`, `dtb size: 3091150`, one vendor ramdisk (`6,528,234` bytes), empty command line and bootconfig.
+- **Verified boot (`avbtool.py info_image`)** `[V]`: `vbmeta.img` (`Flags: 0`, `Algorithm: SHA256_RSA4096`, `Rollback Index: 1791158400`, `Rollback Index Location: 0`) carries **Chain Partition descriptors** for `boot` (rollback index location `2`), `init_boot` (location `4`), `vbmeta_system` (location `1`), and `vbmeta_vendor` (location `3`), **Hash descriptors** (`Flags: 0`) for `vendor_boot`, `vendor_kernel_boot`, `dtbo`, and the 10 bootloader partitions (`abl`, `bl1`, `bl2`, `bl31`, `gcf`, `gsa`, `gsa_bl1`, `ldfw`, `pbl`, `tzsw`), and a **Hashtree descriptor** for `vendor_dlkm`. Correspondingly, `boot.img` (`0x4000000`) and `init_boot.img` (`0x800000`) carry `SHA256_RSA4096` AVB footers with `Rollback Index: 1791158400`, `os_version: 17`, and `security_patch: 2026-10-05`, while `vendor_boot.img`, `vendor_kernel_boot.img`, and `dtbo.img` carry `Algorithm: NONE` footers with `Rollback Index: 0`. As on `husky` and `akita`, a phone with stock `vbmeta_b` therefore matches `AVB_FOOTERS="boot:0x4000000 init_boot:0x800000"`, `AVB_ROLLBACK_INDEX=1791158400`, and `AVB_SECURITY_PATCH=2026-10-05`.
+- **Eight base DTBs in `vendor_kernel_boot` (`#address-cells = <2>`, `#size-cells = <1>`)** `[V]`:
+  - `00`..`03`: `compatible = "google,zuma"`, `product_id = <0x9865>` (`A0_FOPLP`, `A0_IPOP`, `B0_FOPLP`+`B1_FOPLP`, `B0_IPOP`+`B1_IPOP`), serving the early Proto 1.x `zuma` boards in `dtbo.img`.
+  - `04`: `compatible = "google,zumapro"`, `A0_FOPLP` (`product_id = <0x9875>`, `major = <0>`, `minor = <0>`, `pkg_mode = <0>`).
+  - `05`: `compatible = "google,zumapro"`, `A0_IPOP` (`product_id = <0x9875>`, `major = <0>`, `minor = <0>`, `pkg_mode = <1>`).
+  - **`06`**: `compatible = "google,zumapro"`, `A0_FOPLP` (`minor = <0>`) and `A1_FOPLP` (`minor = <1>`) (`product_id = <0x9875>`, `major = <0>`, `pkg_mode = <0>`), selected by this phone's bootloader (part 4).
+  - `07`: `compatible = "google,zumapro"`, `A0_IPOP` and `A1_IPOP` (`product_id = <0x9875>`, `major = <0>`, `minor = <0>`/`<1>`, `pkg_mode = <1>`).
+- **Board `dtbo.img` (60 entries, `0`..`59`)** `[V]` (`F/` `mkdtboimg.py`, `G/`): covers the `caimito` family (`komodo`, `caiman`, `tokay`, and `Ripcurrent24`/`Ripcurrentpro` reference boards). `caiman`'s `zumapro` entries are `35`..`49` (`0x60903` EVT 1.0/1.1, `0x60904` DVT 1.0, `0x60905` PVT 1.0, `0x60906` MP). **Entry `49` (`ro.boot.dtbo_idx = 49`) is `ZUMA PRO CAIMAN MP board based on ZUMA PRO` (`board_id = <0x60906>`, `board_rev = <0x10000>`, root `compatible = "google,ZUMA PRO CAIMAN", "google,ZUMA PRO"`)**, matching `G/` [`dts/zumapro-caiman-mp.dts` lines 17-18](https://android.googlesource.com/kernel/devices/google/caimito/+/38a058681d6cefbb95200dc8a5348939773eb9d6/dts/zumapro-caiman-mp.dts#17).
+
+## Interpretation and open questions (AI-assisted, not yet verified on Linux)
+
+- **I1. CPU cluster mapping.** Arm part numbers `0xd80` (×4), `0xd81` (×3), and `0xd82` (×1) correspond to four Cortex-A520, three Cortex-A720, and one Cortex-X4, matching `K/` `zumapro.dtsi`.
+- **I2. RAM configuration.** `MemTotal` (`15,456,904 kB`) and the eight `memory@*` nodes at `0x80000000` and `0x880000000`..`0xb80000000` indicate 16 GiB DRAM split into eight 2 GiB banks; exact bank `reg` lengths require root or a booted mainline `/sys/firmware/fdt` read.
+- **I3. Silicon revision (A1 FOPLP).** Because Base DTB `04` matches `(0x9875, 0, 0, 0)` earlier in `vendor_kernel_boot` table order while only Base DTB `06` adds `(0x9875, 0, 1, 0)`, the phone selecting Base DTB `06` strongly indicates A1 FOPLP silicon; shipping both `a0-foplp` and `a1-foplp` in `/soc_compatible` covers all FOPLP retail units.
+- **I4. Equalizing Slot A before unlock.** Slot A's `slot-unbootable: yes` flag is consistent with a factory-shipped or OTA-updated Slot-B handset whose inactive slot was never populated or cleared. Sideloading `caiman-ota-cp3a.261005.005-9eef9468.zip` from recovery (twice if needed so both slots boot `CP3A.261005.005` on `ripcurrentpro-17.0-15819938` with `slot-unbootable: no`) is a mandatory gate before unlocking or writing Slot B.
+- **I5. Touchscreen compatibility.** Because `touchscreen@0` sits on the same SPI bus (`spi20`), interrupt (`gpn0-0`), reset (`gpp1-1`), and LDO rails (`S2MPG14_LDO4` / `S2MPG14_LDO25`) as `tegu`'s Synaptics S3908 (`syna,s3908`), the existing TouchComm SPI driver in `linux-omarchy-mobile` is a direct candidate once verified on hardware (stock vendor modules carry `synaptics_tcm2.ko`, `S3908TG` in `G/` `zuma-caiman-touch.dtsi`).
+- **I6. Boot framebuffer and `google,gs-cm4` panel.** No `reserved-memory` child names a splash buffer; on sibling `zuma`/`zumapro` boards ABL places its splash at `0xfac00000` and masks `DECON0` `TRIG_CON` (`0x19470030`) if the panel runs in DSI command mode. Those display registers and the splash address must be read once on `caiman` at M1 first light rather than assumed from another phone (`CONTRIBUTING.md` §5.3).
+- **I7. Audio amplifiers (`CS35L41`).** Unlike `tegu`'s `TAS2572`, `caiman`'s dual SPI `CS35L41` setup matches the amplifier family already supported on `cheetah`, though SPI chip-select, GPIO, and AoC channel mapping are `caiman`-specific and require speaker-protection qualification before unmuting.
+- **I8. `BCM4390` Wi-Fi 7 / Bluetooth.** `bcmdhd4390.ko` indicates PCIe/UART IDs not yet listed in mainline `brcmfmac` or `hci_bcm`, so Wi-Fi and Bluetooth will require PCI ID / OTP inspection and firmware extraction rules after M1–M5 bring-up.
+- **I9. `s5400` modem.** `caiman` pairs `zumapro` with the Exynos `s5400` baseband (`g5400c`), whereas `tegu` uses `s5300`; CPIF/SIT compatibility on `s5400` is untested.
+- **I10. Ultrasonic fingerprint (`qbt_handler`).** Qualcomm's `qfs4008` ultrasonic sensor differs from the optical Goodix sensors on `cheetah` and `tegu`.
+- **I11. Camera sensors.** Stock's four LWIS sensor names (`boitata`, `taotie-front`, `taotie-uw`, `taotie-tele`) require I2C chip-ID verification against `G/` and `tools/extract-camera-data` before any V4L2/CSIS work.
+- **I12. OEM unlocking toggle.** `get_unlock_ability: 0` was read before toggling "OEM unlocking" in Developer Options; flipping that setting on Android (with Wi-Fi connected if Android requests server check-in) and re-checking `get_unlock_ability: 1` is part of the pre-unlock gate alongside Slot A OTA equalization.
