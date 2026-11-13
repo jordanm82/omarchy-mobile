@@ -1,12 +1,13 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Bring up the Pixel 9 Pro's GPU (panthor) and KMS display (gs_decon) at
-# boot, hang-safe. Both drivers are blacklisted for autoload
-# (modprobe.d/omamobile-caiman-guards.conf), so this script loads them in
-# order after writing and syncing a marker. If either step fails and returns,
-# the failure is logged and skipped so simpledrm (when present) still brings
-# up the desktop on llvmpipe; only a hard kernel hang leaves the marker behind,
-# causing the next boot to leave them unloaded until an owner runs:
+# Bring up the Pixel 9 Pro's GPU, display, haptics, torch, battery gauge,
+# Bluetooth controller and NFC at boot, hang-safe. All seven drivers are
+# blacklisted for autoload (modprobe.d/omamobile-caiman-guards.conf), so this
+# script loads them in order after writing and syncing a marker. If a step
+# fails and returns, the failure is logged and skipped so simpledrm (when
+# present) still brings up the desktop on llvmpipe and remaining peripherals
+# still start; only a hard kernel hang leaves the marker behind, causing the
+# next boot to leave them unloaded until an owner runs:
 #   omamobile-caiman-graphics-start [--retry]
 #
 # gs_dsim_cmd.allow_tx (panel brightness, sleep and 120 Hz) is allowed only
@@ -23,13 +24,28 @@ fi
 
 state=$root/var/lib/omamobile
 marker=$state/caiman-graphics-started
+dt=$root/proc/device-tree
 cmdline=$root/proc/cmdline
 gpu=$root/sys/bus/platform/devices/1f000000.gpu
 decon=$root/sys/bus/platform/devices/19470000.display-controller
 allow_tx=$root/sys/module/gs_dsim_cmd/parameters/allow_tx
+torch=$root/sys/class/leds/white:torch
+gauge=$root/sys/class/power_supply/max77779-battery
+haptics_node=$dt/soc/usi@10c900c0/i2c@10c90000/haptic-driver@43
+torch_node=$dt/soc/usi@108b00c0/i2c@108b0000/led-controller@63
+gauge_node=$dt/soc/usi@108d00c0/i2c@108d0000/fuel-gauge@36
+bluetooth_node=$dt/soc/usi@155d00c0/serial@155d0000/bluetooth
+nfc_node=$dt/soc/usi@10c900c0/i2c@10c90000/nfc@8
+nfc=$root/sys/class/nfc/nfc0
 
 log() { echo "omamobile-caiman-graphics: $*"; }
 loaded() { [[ -d $root/sys/module/$1 ]]; }
+# A device-tree node is enabled when it exists and has no status or "okay".
+enabled() {
+  [[ -d $1 ]] || return 1
+  [[ -e $1/status ]] || return 0
+  case $(tr -d '\0' < "$1/status") in okay|ok) return 0 ;; *) return 1 ;; esac
+}
 
 # Wait for a device to bind to a driver: device dir, driver name, quarter seconds.
 bound() {
@@ -72,7 +88,7 @@ esac
 mkdir -p "$state" "$root/run"
 
 if [[ -e $marker ]]; then
-  log "the last start ($(cat "$marker" 2>/dev/null)) never finished; GPU and display stay off this boot."
+  log "the last start ($(cat "$marker" 2>/dev/null)) never finished; GPU, display, haptics, torch, gauge, Bluetooth and NFC stay off this boot."
   log "after checking the previous boot's log, retry with: omamobile-caiman-graphics-start --retry"
   resolve_display_card || true
   exit 0
@@ -139,6 +155,72 @@ fi
 
 # Re-resolve after panthor and gs_decon in case DRM card numbers shifted.
 resolve_display_card || true
+
+if enabled "$haptics_node"; then
+  phase haptics
+  if modprobe cs40l26_vibra; then up+="${up:+, }haptics"; else skip haptics "cs40l26_vibra failed (see dmesg)"; fi
+else
+  log "no haptics in this DTB; skipped"
+fi
+
+if enabled "$torch_node"; then
+  phase torch
+  if ! modprobe leds_lm3644; then
+    skip torch "leds_lm3644 failed (see dmesg)"
+  else
+    for _ in $(seq 40); do [[ -e $torch/brightness ]] && break; sleep 0.25; done
+    if [[ ! -e $torch/brightness ]]; then
+      log "no white:torch LED after the driver loaded (see dmesg)"
+    elif [[ $(cat "$torch/brightness") != 0 ]]; then
+      # It must start off: turn it off here and say so.
+      echo 0 > "$torch/brightness" 2>/dev/null
+      skip torch "the torch came up lit; turned off (brightness now $(cat "$torch/brightness" 2>/dev/null))"
+    else
+      up+="${up:+, }torch"
+    fi
+  fi
+else
+  log "no torch in this DTB; skipped"
+fi
+
+if enabled "$gauge_node"; then
+  phase gauge
+  if ! modprobe max77779_battery; then
+    skip gauge "max77779_battery failed (see dmesg)"
+  else
+    for _ in $(seq 40); do [[ -e $gauge/capacity ]] && break; sleep 0.25; done
+    if [[ -e $gauge/capacity ]]; then
+      up+="${up:+, }gauge $(cat "$gauge/capacity") %"
+    else
+      log "no max77779-battery supply after the driver loaded (see dmesg)"
+    fi
+  fi
+else
+  log "no fuel gauge in this DTB; skipped"
+fi
+
+# The address and the power-on are omamobile-bt-addr@'s, started by udev.
+if enabled "$bluetooth_node"; then
+  phase bluetooth
+  if modprobe hci_uart; then up+="${up:+, }Bluetooth"; else skip Bluetooth "hci_uart failed (see dmesg)"; fi
+else
+  log "no Bluetooth in this DTB; skipped"
+fi
+
+# NFC: nxp-nci on the haptics' bus, with the PMU's NFC clock pad as its
+# reference clock (clk-exynos-clkout); without the clock the ST54L doesn't
+# answer on I2C, so the node names it and the driver turns it on.
+if enabled "$nfc_node" && [[ -e $nfc_node/clocks ]]; then
+  phase nfc
+  if ! modprobe nxp_nci_i2c; then
+    skip NFC "nxp_nci_i2c failed (see dmesg)"
+  else
+    for _ in $(seq 20); do [[ -e $nfc ]] && break; sleep 0.25; done
+    if [[ -e $nfc ]]; then up+="${up:+, }NFC"; else skip NFC "no nfc0 after the driver loaded (see dmesg)"; fi
+  fi
+else
+  log "no NFC with its clock in this DTB; skipped"
+fi
 
 finish
 log "up: ${up:-nothing}"
