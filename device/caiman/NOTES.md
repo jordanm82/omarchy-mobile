@@ -1,11 +1,11 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 9 Pro (caiman) bring-up notes
 
-Findings for the Google Pixel 9 Pro port (`caiman`, SoC `zumapro`, Tensor G4), newest first. Nothing here has booted or flashed anything of ours: stage 0 is strictly read-only. `caiman` shares the `zumapro` SoC with the [Pixel 9a (`tegu`)](../tegu/NOTES.md).
+Findings for the Google Pixel 9 Pro port (`caiman`, SoC `zumapro`, Tensor G4), newest first. `caiman` shares the `zumapro` SoC with the [Pixel 9a (`tegu`)](../tegu/NOTES.md).
 
 The sections below are a fact record. Every fact printed by a tool is marked `[V]` with its source (`F/`, `R/`, `G/`, or `K/`). Every inference, hypothesis, and open question is kept out of the fact sections and collected in "Interpretation and open questions" at the end (`I1` to `I12`).
 
-**This phone runs untouched stock Android.** It is a dedicated spare retail Pixel 9 Pro running Google's official Android 17 build `CP3A.261005.005` (`16271449`) with a locked bootloader and without root. Four sources are separated throughout:
+**Stage 0 captures were taken on untouched stock Android, followed by official OTA Slot-A equalization and bootloader unlock.** The test unit is a dedicated spare retail Pixel 9 Pro running Google's official Android 17 build `CP3A.261005.005` (`16271449`) without root. Four sources are separated throughout:
 
 - `F/`: Google's official factory package `caiman-cp3a.261005.005-factory-6c37847c.zip` (SHA-256 `6c37847c9db3601e1228b48a08e7124af24f0fe936a36c2eada98c28abfe144c`) and full OTA `caiman-ota-cp3a.261005.005-9eef9468.zip` (SHA-256 `9eef946868ce133a507e6c626299923db7561f016aa34bca6c212623bb2d0e79`), verified against Google's published hashes and inspected offline on the host.
 - `R/`: read-only `adb` and `fastboot` queries of the retail phone by exact property or variable name (never a bare `getprop` dump, never `fastboot getvar all`, no shell writes). Raw output lists remain in private reference storage outside the repository; no serial, IMEI, MAC address, or partition image is stored here.
@@ -40,6 +40,29 @@ adb shell find /proc/device-tree -type d  # directory/node names only; SELinux d
 fastboot getvar <name>                 # named variables only; never fastboot getvar all
 fastboot flashing get_unlock_ability
 ```
+
+## 2026-11-13: M1.4 boot framebuffer console (`1280x2856`) and `reboot-to bootloader` (`gate b`)
+
+Flashed `7.3.0-rc6-omamobile-push1-gd24dfc66819c` (`d24dfc668`) onto Slot B (`slot-successful:b: no`, `slot-retry-count:b: 3`, Slot A untouched at `slot-successful:a: yes`, `slot-unbootable:a: no`) ([BRINGUP-M1.md](BRINGUP-M1.md)):
+
+- **`reboot-to bootloader` warm reboot to Fastboot Mode** `[V]` (`R/`): running `/usr/local/bin/reboot-to bootloader` from mainline Linux (`reboot=warm`, `15460000.system-controller:reboot-mode` writing `0xfc` at PMU offset `0x0810`) landed directly in Fastboot Mode (`fastboot devices`), both when `slot-retry-count:b` had reached `0` and again from `slot-retry-count:b: 2`.
+- **`simpledrm` `1280x2856` console on panel** `[V]` (`R/`, live `dmesg` + owner visual check): `cont_splash_mem: splash@fac00000` (`0xfac00000..0xfb9f1fff`, `14,280 KiB`, `nomap`) reserved cleanly with zero overlaps; `simpledrm` bound `chosen:framebuffer` as `fb0` (`simpledrmdrmfb`, `virtual_size` `1280,2856`, `card0-Unknown-1` `1280x2856`); single-argument read-only `devmem` confirmed `DECON0 TRIG_CON` (`0x19470030`) = `0x00003061` (unmasked by `SIMPLEFB_TRIG_CON`), `DPP0 RDMA_BASEADDR_P0` (`0x19900040`) = `0xfac00000`, and `DECON0 GLOBAL_CON` (`0x19470020`) = `0x00000133`. The initramfs Linux console rendered cleanly on the Pixel 9 Pro's OLED panel and stayed up past `3,295 s` (`55 min`) with zero kernel errors or warnings.
+
+## 2026-11-12: M1.3 first-light mainline Linux 7.3.0-rc6 boot on Slot B and display handover reads
+
+Flashed the five `*_b` partitions (`boot_b`, `init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b`, `dtbo_b`) from `7.3.0-rc6-omamobile-push1-gbeb3f7ab6bcf` onto Slot B (`slot-successful:b: no`, `slot-retry-count:b: 3`) with Slot A verified untouched (`slot-successful:a: yes`, `slot-unbootable:a: no`) ([BRINGUP-M1.md](BRINGUP-M1.md)):
+
+- **Mainline kernel, SMP, EL2/KVM, watchdogs, ACPM, RTC, and USB gadget** `[V]` (`R/`, live `dmesg` + CDC-ACM console): booted `Linux omamobile 7.3.0-rc6-omamobile-push1-gbeb3f7ab6bcf #1 SMP PREEMPT` on `Google Pixel 9 Pro` (`compatible = "google,zumapro-caiman", "google,zumapro"`). All 8 CPUs started at `EL2` (`SMP: Total of 8 processors activated`, `kvm [1]: Hyp nVHE mode initialized successfully`), `ramoops` bound `0x400000@0xfd3ff000`, both cluster watchdogs (`10060000.watchdog`, `10070000.watchdog`) bound cleanly (`watchdog inactive, reset disabled, irq disabled`), `exynos-acpm-protocol` initialized all 16 channels, `s5m-rtc s2mpg14-rtc` registered as `rtc0`, `omamobile: USB gadget up on 11210000.usb` enumerated at `0.238 s` (`udc` state `configured`), and the phone remained stable well past `257 s` uptime with zero kernel errors or `reserved-memory` overlaps and no `/sys/block/sd*` disks exposed (UFS disabled as designed).
+- **ABL runtime rewrites and panel identifier** `[V]` (`R/`, live `/sys/firmware/fdt`): ABL narrowed `/reserved-memory/abl@f8800000` at boot to `reg = <0x00 0xf8800000 0x1000000>` (`f8800000-f97fffff : reserved` in `/proc/iomem`, leaving `f9800000-fd3effff` as `System RAM`) and appended `exynos_drm.panel_name=google-cm4.<panel-id>` on `chosen/bootargs`.
+- **Bootloader display handover registers and panel dimensions** `[V]` (`R/`, single-argument `devmem`; `G/`, `panel-gs-cm4.c`): with ABL's splash undisturbed on the panel, read-only `devmem` calls returned `DPP0 RDMA_BASEADDR_P0` (`0x19900040`) = `0xfac00000`, `DECON0 GLOBAL_CON` (`0x19470020`) = `0x00000133`, and `DECON0 TRIG_CON` (`0x19470030`) = `0x00003070` (software trigger masked, matching `zuma-akita` / `zumapro-tegu` where `SIMPLEFB_TRIG_CON="0x19470030 0x3061"` unmasks DSI command-mode updates). Google's MIT-licensed `google-modules/display/panels/caimito/panel-gs-cm4.c` defines `WIDTH_MM = 66` and `HEIGHT_MM = 147` (`1280x2856`).
+
+## 2026-11-12: Slot A equalized via official OTA and bootloader unlocked
+
+Completed before building or flashing any custom image (`CONTRIBUTING.md` §3.1):
+
+- **Official OTA sideload to Slot A** `[V]` (`F/`, `R/`): from stock Android Recovery on Slot B (`adb -d reboot recovery` → *Apply update from ADB*), sideloaded `caiman-ota-cp3a.261005.005-9eef9468.zip` (`Total xfer: 2.00x`, exit code `0`) and booted into **Slot A**. Read-only `adb` on Slot A verified `ro.boot.slot_suffix` = `_a`, `sys.boot_completed` = `1`, `ro.build.id` = `CP3A.261005.005` (`16271449`, `2026-10-05`), `ro.bootloader` = `ripcurrentpro-17.0-15819938`, `gsm.version.baseband` = `g5400c-260604-260807-B-16035863`, and `ro.boot.dtbo_idx` = `49` — identical to Slot B's build, bootloader, baseband, and DTBO index (part 2).
+- **Post-OTA slot flags and unlock eligibility** `[V]` (`R/`): in Fastboot Mode after Slot A completed boot, named `fastboot getvar` checks reported `current-slot: a`, `slot-successful:a: yes`, `slot-unbootable:a: no`, `slot-retry-count:a: 2`, `slot-successful:b: yes`, `slot-unbootable:b: no`, `slot-retry-count:b: 2`, `version-bootloader: ripcurrentpro-17.0-15819938`, `version-baseband: g5400c-260604-260807-B-16035863`, and `fastboot flashing get_unlock_ability` = `1`.
+- **Owner-executed bootloader unlock and post-wipe Slot-A verification** `[V]` (`R/`): the owner ran `fastboot flashing unlock` in their own terminal and confirmed on the handset, wiping `userdata`. Stock Android then booted cleanly on **Slot A** (`ro.boot.slot_suffix` = `_a`, `ro.boot.flash.locked` = `0`, `ro.boot.verifiedbootstate` = `orange`, `ro.build.id` = `CP3A.261005.005`, `ro.bootloader` = `ripcurrentpro-17.0-15819938`, `sys.boot_completed` = `1`), leaving Slot A verified as an untouched stock Android fallback before any Slot-B experiment ([BRINGUP-M1.md](BRINGUP-M1.md)).
 
 ## 2026-11-12: stage 0, part 5: caiman's merged factory tree against `zumapro` in `linux-omarchy-mobile`
 

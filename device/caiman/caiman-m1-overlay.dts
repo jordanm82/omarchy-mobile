@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Empty board overlay for the Pixel 9 Pro bootloader (ABL).
+ *
+ * ABL picks a dtbo entry by board_id/board_rev and applies it on top of
+ * our base DTB. Stock's overlay references vendor labels absent from the
+ * mainline DTB, so ship one that changes nothing. board_id/board_rev are
+ * entry 49 of stock dtbo.img (ro.boot.dtbo_idx = 49), Google's MP board
+ * overlay zumapro-caiman-mp.dts (NOTES.md).
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	board_id = <0x60906>;
+	board_rev = <0x10000>;
+
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+		};
+	};
+};
