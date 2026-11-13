@@ -1,0 +1,104 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Bring up the Pixel 9 Pro's GPU (panthor) and resolve the display DRM card
+# at boot, hang-safe. panthor is blacklisted for autoload
+# (modprobe.d/omamobile-caiman-guards.conf), so this script is the only thing
+# that loads it after writing and syncing a marker. If a load fails and returns,
+# the failure is logged and skipped so simpledrm still brings up the desktop on
+# llvmpipe; only a hard kernel hang leaves the marker behind, causing the next
+# boot to leave panthor unloaded until an owner runs:
+#   omamobile-caiman-graphics-start [--retry]
+# OMAMOBILE_CAIMAN_ROOT: a scratch root for package tests (fake /sys, /dev).
+set -uo pipefail
+
+root=${OMAMOBILE_CAIMAN_ROOT:-}
+if [[ -n $root ]]; then
+  [[ $root == /* && $root != / && -d $root ]] || exit 2
+  root=$(readlink -f "$root")
+fi
+
+state=$root/var/lib/omamobile
+marker=$state/caiman-graphics-started
+gpu=$root/sys/bus/platform/devices/1f000000.gpu
+
+log() { echo "omamobile-caiman-graphics: $*"; }
+loaded() { [[ -d $root/sys/module/$1 ]]; }
+
+# Wait for a device to bind to a driver: device dir, driver name, quarter seconds.
+bound() {
+  local i
+  for ((i = 0; i < $3; i++)); do
+    [[ $(readlink -f "$1/driver" 2>/dev/null) == */$2 ]] && return 0
+    sleep 0.25
+  done
+  return 1
+}
+
+resolve_display_card() {
+  local by_path card
+  for by_path in \
+    "$root/dev/dri/by-path/platform-19470000.display-controller-card" \
+    "$root/dev/dri/by-path/platform-chosen:framebuffer-card"; do
+    card=$(readlink -f "$by_path" 2>/dev/null || true)
+    if [[ -n $card && -e $card ]]; then
+      printf '%s\n' "${card#"$root"}" > "$root/run/omamobile-caiman-display-card"
+      return 0
+    fi
+  done
+  return 1
+}
+
+case ${1:-} in
+  '') ;;
+  --retry) rm -f "$marker" ;;
+  *) log "usage: omamobile-caiman-graphics-start [--retry]"; exit 2 ;;
+esac
+
+mkdir -p "$state" "$root/run"
+
+if [[ -e $marker ]]; then
+  log "the last start ($(cat "$marker" 2>/dev/null)) never finished; panthor stays off this boot."
+  log "after checking the previous boot's log, retry with: omamobile-caiman-graphics-start --retry"
+  resolve_display_card || true
+  exit 0
+fi
+
+# Always publish the display card (simpledrm or gs-decon) when present so
+# AQ_DRM_DEVICES stays explicit even if the GPU is absent or skipped.
+resolve_display_card || true
+
+if [[ ! -e $gpu ]]; then
+  log "no GPU node in this DTB; skipped"
+  exit 0
+fi
+
+if [[ ${1:-} != --retry ]] && loaded panthor; then
+  log "already started this boot"
+  exit 0
+fi
+
+phase() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" > "$marker"; sync -f "$marker" 2>/dev/null || sync; }
+finish() { rm -f "$marker"; sync -f "$state" 2>/dev/null || sync; }
+
+failed=
+skip() { log "$2; skipped"; failed+="${failed:+, }$1"; }
+
+phase gpu
+if ! modprobe panthor; then
+  skip GPU "panthor failed (no mali_csffw.bin yet? see dmesg)"
+elif ! bound "$gpu" panthor 60; then
+  skip GPU "the GPU did not bind to panthor (see dmesg)"
+else
+  printf '{"gpu": "panthor", "by": "omamobile-caiman-graphics-start"}\n' > "$root/run/omamobile-caiman-gpu-ready.json"
+  log "up: GPU"
+fi
+
+# Re-resolve after panthor in case DRM device numbers shifted, or keep existing.
+resolve_display_card || true
+
+finish
+if [[ -n $failed ]]; then
+  log "failed: $failed (marker cleared; --retry tries again)"
+  exit 1
+fi
+exit 0

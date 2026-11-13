@@ -9,8 +9,10 @@ fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
-bash -n build || fail "build parses"
-bash -n install || fail "install parses"
+for script in build install bin/* test/*; do
+  bash -n "$script" || fail "$script parses"
+done
+sh -n uwsm/env.d/omamobile-caiman-graphics || fail "uwsm env.d parses as POSIX shell"
 pass "scripts parse"
 
 grep -q '\.\./\.\.' build install && fail "build or install reaches outside the package directory"
@@ -54,11 +56,12 @@ if [[ -f ../omamobile-device-husky/vendor/systemd/network/20-usb-gadget.network 
   pass "the USB link's network files match the husky package"
 fi
 grep -q 'omamobile-keyring' PKGBUILD || fail "pacman needs omamobile-keyring"
+grep -q 'kmod' PKGBUILD || fail "pacman needs kmod for graphics-start"
 grep -q '^install=omamobile-device-caiman.install$' PKGBUILD \
   || fail "the pacman install script is not named"
 [[ -f etc/omamobile-mirrorlist && -f omamobile-device-caiman.install ]] \
   || fail "the pacman mirrorlist or install script is missing"
-pass "pacman gets the keyring, the mirrorlist, and the install script"
+pass "pacman gets the keyring, kmod, the mirrorlist, and the install script"
 if [[ -f ../../device/caiman/device.conf ]]; then
   cmp -s device.conf ../../device/caiman/device.conf \
     || fail "device.conf drifted from the descriptor"
@@ -71,19 +74,36 @@ pass "reboot-to compiles"
 
 ./install "$tmp/root" "$tmp/build"
 for f in usr/bin/reboot-to \
+         usr/bin/omamobile-caiman-graphics-start \
+         usr/lib/modprobe.d/omamobile-caiman-clk-acpm.conf \
+         usr/lib/modprobe.d/omamobile-caiman-guards.conf \
          usr/lib/udev/rules.d/10-omamobile-storage.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
+         usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-caiman.conf \
+         usr/lib/systemd/system/display-manager.service.d/10-omamobile-caiman.conf \
+         usr/lib/systemd/system/omamobile-caiman-graphics.service \
+         usr/share/uwsm/env.d/omamobile-caiman-graphics \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-caiman/version \
          usr/share/licenses/omamobile-device-caiman/LICENSE \
          etc/pacman.d/omamobile-mirrorlist; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
-[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 10 ]] \
-  || fail "install stages exactly these ten files: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-caiman-graphics.service") == ../omamobile-caiman-graphics.service ]] \
+  || fail "omamobile-caiman-graphics.service is enabled by a vendor wants link"
+[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 18 ]] \
+  || fail "install stages expected 18 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
+grep -qx 'ConditionPathExists=!/usr/share/omamobile/device-caiman/version' \
+  "$tmp/root/usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-caiman.conf" \
+  || fail "module cleanup guard missing"
+grep -qx 'blacklist panthor' "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-guards.conf" \
+  || fail "panthor must be blacklisted for autoload"
+grep -qx 'options clk_acpm zumapro_gpu_max_khz=890000' \
+  "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-clk-acpm.conf" \
+  || fail "clk_acpm max GPU clock missing"
 grep -qx 'MemorySleepMode=s2idle' "$tmp/root/usr/lib/systemd/sleep.conf.d/10-omamobile.conf" \
   || fail "suspend must use s2idle"
 grep -qx 'AllowHibernation=no' "$tmp/root/usr/lib/systemd/sleep.conf.d/10-omamobile.conf" \
@@ -109,13 +129,36 @@ for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
               usr/bin/omamobile-camera-start; do
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
-pass "install stages the udev rule, the USB link and the mirrorlist, and nothing that marks a slot or starts the radio, the charger or a camera"
-[[ ! -e $tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf ]] \
-  || fail "caiman has no lid: no lid drop-in"
-pass "no lid drop-in"
+pass "install stages expected package files and guards without slot marking, radio, charger, or camera"
+
+# Exercise graphics-start in a scratch root: marker block, --retry recovery,
+# panthor bind, and simpledrm fallback card discovery.
+fake=$tmp/fake
+fbin=$tmp/fbin
+mkdir -p "$fake/sys/bus/platform/devices/1f000000.gpu" \
+         "$fake/sys/bus/platform/drivers/panthor" \
+         "$fake/dev/dri/by-path" "$fbin"
+: > "$fake/dev/dri/card0"
+ln -s ../card0 "$fake/dev/dri/by-path/platform-chosen:framebuffer-card"
+cat > "$fbin/modprobe" <<EOF
+#!/bin/bash
+ln -sfn "$fake/sys/bus/platform/drivers/panthor" "$fake/sys/bus/platform/devices/1f000000.gpu/driver"
+EOF
+chmod +x "$fbin/modprobe"
+
+mkdir -p "$fake/var/lib/omamobile"
+echo "2026-11-13 gpu" > "$fake/var/lib/omamobile/caiman-graphics-started"
+PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start" >/dev/null
+[[ ! -e $fake/run/omamobile-caiman-gpu-ready.json ]] || fail "existing marker must block GPU load"
+[[ $(cat "$fake/run/omamobile-caiman-display-card") == /dev/dri/card0 ]] || fail "marker block must still publish simpledrm display card"
+
+PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start" --retry >/dev/null
+[[ ! -e $fake/var/lib/omamobile/caiman-graphics-started ]] || fail "--retry must clear marker on success"
+[[ -s $fake/run/omamobile-caiman-gpu-ready.json ]] || fail "GPU ready json must be created"
+pass "hang-safe graphics start honors marker, --retry, and simpledrm card discovery"
 
 net=vendor/systemd/network/20-usb-gadget.network
 ! sed -n '/^\[Network\]/,/^\[/p' "$net" | grep -c '^Gateway=' >/dev/null || fail "usb0 sets no default route in [Network] (metric 0)"
-metric=$(sed -n '/^\[Route\]/,/^\[/{s/^Metric=//p}' "$net")
+metric=$(sed -n '/^\[Route\]/,/^\[/{s/^Metric=//p;}' "$net")
 [[ ${metric:-0} -gt 700 ]] || fail "usb0's gateway goes after Wi-Fi (600) and mobile data (700)"
 pass "USB is the last gateway"
