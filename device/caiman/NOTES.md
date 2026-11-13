@@ -41,6 +41,13 @@ fastboot getvar <name>                 # named variables only; never fastboot ge
 fastboot flashing get_unlock_ability
 ```
 
+## 2026-11-13: Stage 5 — `panel-google-cm4`, `gs-decon` KMS, and 120 Hz Display
+
+Built `7.3.0-rc6-omamobile-push1-gf71678d09eda` (`df13b3b8f`..`f71678d09` on `omamobile-zumapro-caiman-display`, adding `google,cm4.yaml`, `panel-google-cm4`, multi-geometry mode-set matching in `gs-decon`, `64 MiB` `display_pool` at `0x98000000`, `&decon0`, and `&dsi0`), upgraded `omamobile-device-caiman` to `0.3.0-1`, pushed modules, and verified across two boots on Slot B ([BRINGUP-M5.md](BRINGUP-M5.md)):
+
+- **`gs-dsim-cmd` and 120 Hz timer match** `[V]` (`R/`, `dmesg`): `gs-dsim-cmd 19440000.dsi` read `CMD_TE_CTRL1 (0x088) = 0x34c53c1e` and matched `link timers for 60 Hz` (`1368 Mbit/s` / `85.5 MHz` word clock / `350 us` TE idle, shared with HK3), so `120 Hz` worked immediately without a separate `gs_dsim_rates[]` entry.
+- **`gs-decon` KMS, backlight, DPMS, and persistence** `[V]` (`R/`, `hyprctl` + `sysfs`): `omamobile-caiman-graphics.service` set `gs_dsim_cmd.allow_tx=1` (matching `google-cm4`) and switched `/run/omamobile-caiman-display-card` from `simpledrm` to `/dev/dri/card2`. Hyprland ran `1280x2856@120.00000` (`66x147 mm`), backlight verified across `1209 -> 300 -> 2400 -> 0 -> 1209` (`max_brightness=3271`), DPMS `screen_off=2` toggled `On -> Off -> On` cleanly (halting and resuming `gs-decon-fs` IRQs), and Boot #2 persisted with `0` errors.
+
 ## 2026-11-13: Stage 4 — Mali-G715 `panthor` GPU and ACPM DVFS (`150`–`890 MHz`)
 
 Built `7.3.0-rc6-omamobile-push1-g93d6322221b1` (`93d632222` on `omamobile-zumapro-caiman-gpu`, adding `<dt-bindings/clock/google,zumapro-acpm.h>`, 13 `gpu_opp` entries `150`–`890 MHz`, `&cmu_g3d`, and `&gpu` to `zumapro-caiman.dts`), installed `omamobile-device-caiman` `0.2.0-1`, pushed `/usr/lib/modules/7.3.0-rc6-omamobile-push1-g93d6322221b1`, and flashed Slot B's 5 boot images (`slot-retry-count:b` refreshed `2 → 3`, Slot A untouched) ([BRINGUP-M4.md](BRINGUP-M4.md)):

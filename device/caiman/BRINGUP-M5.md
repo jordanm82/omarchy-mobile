@@ -1,6 +1,6 @@
 # Pixel 9 Pro (`caiman`) — M5 Display (`panel-google-cm4` + `gs-decon` KMS + `gs-dsim-cmd`)
 
-Status: offline preparation built and validated; awaiting owner approval for Slot B flash and live hardware Boot #1.
+Status: **PASSED on hardware across Boot #1 and Boot #2** (`7.3.0-rc6-omamobile-push1-gf71678d09eda`, `omamobile-device-caiman` `0.3.0-1`, `slot-retry-count:b` refreshed to `3` before Boot #1, Slot A untouched).
 
 ## Scope & Architecture
 
@@ -28,13 +28,17 @@ Status: offline preparation built and validated; awaiting owner approval for Slo
    - `W=1` compile of `exynos/google/zumapro-caiman.dtb`, `panel-google-cm4.o`, and `gs-decon.o` plus full incremental build (`7.3.0-rc6-omamobile-push1-gf71678d09eda`) passed with 0 warnings/errors.
    - Packed clean `modules-7.3.0-rc6-omamobile-push1-gf71678d09eda.tar.zst` (1828 modules, zero AppleDouble files) and AVB-signed boot images in `images-m5-display/` (`dtb.img` verified for `decon0`, `dsi0`/`google,cm4`, `display-pool`; `initramfs` verified for `ssh-ed25519`).
 
-## Hardware Verification Plan (Pending Owner Approval)
+## Hardware Verification Results (Boot #1 & Boot #2 Passed)
 
 1. **Install & Flash (`Slot B` only):**
-   - On the live M4 boot (`172.16.42.1`): push `modules-7.3.0-rc6-omamobile-push1-gf71678d09eda.tar.zst` (`modules-push`) and upgrade `omamobile-device-caiman` to `0.3.0-1` (`pacman -U` + `sync`).
-   - Reboot to bootloader (`fastboot`) and flash `images-m5-display/{boot,init_boot,vendor_boot,vendor_kernel_boot,dtbo}.img` to `_b` (`slot-retry-count:b` reset to `3`).
-2. **Boot #1 Verification (60 Hz KMS + DSIM Timer Capture):**
-   - Verify `gs_dsim_cmd.allow_tx=1`, `panel-google-cm4` backlight (`/sys/class/backlight/*`), `gs-decon` binding on `19470000.display-controller`, `1280x2856` KMS replacing `simpledrm`, and Hyprland rendering with `panthor`.
-   - Read ABL's 60 Hz `UNDERRUN_CTRL` and `CMD_TE_CTRL1` registers logged by `gs_dsim_probe()` in `dmesg`.
-3. **120 Hz Follow-Up:**
-   - Add CM4's measured 60 Hz and derived 120 Hz (`85.5 MHz` word clock) timing row to `gs_dsim_rates[][2]` in `drivers/gpu/drm/google/gs-dsim-cmd.c`, rebuild `gs-dsim-cmd.ko` and boot images, and verify `1280x2856@120`, backlight slider, `screen_off=2` DPMS off/on, and two-boot persistence.
+   - Pushed `/usr/lib/modules/7.3.0-rc6-omamobile-push1-gf71678d09eda` (`depmod -a`) and upgraded `omamobile-device-caiman` to `0.3.0-1` on the running M4 boot (`172.16.42.1`).
+   - Flashed `images-m5-display/{boot,init_boot,vendor_boot,vendor_kernel_boot,dtbo}.img` to `_b` (`slot-retry-count:b: 3`).
+2. **Boot #1 Verification (`1280x2856@120 Hz` on First Boot):**
+   - `omamobile-caiman-graphics.service` exited `0/SUCCESS` (`up: GPU, display`, marker cleared), setting `gs_dsim_cmd.allow_tx=1` (matching `exynos_drm.panel_name=google-cm4.<id>`) and resolving `/run/omamobile-caiman-display-card` to `/dev/dri/card2` (`19470000.display-controller`).
+   - `gs-dsim-cmd` dumped `CMD_TE_CTRL1 (0x088) = 0x34c53c1e` and matched `link timers for 60 Hz` (`1368 Mbit/s` / `85.5 MHz` word clock / `350 us` TE idle — shared with HK3), enabling `120 Hz` immediately without needing a separate row in `gs_dsim_rates[]`.
+   - `gs-decon` attached `display-pool` (`0x98000000`), registered `card2-DSI-1` (`1280x2856`, `60/120 Hz`), and switched cleanly to `120 Hz` (`gs-decon-fs` / `gs-decon-fd` ticking evenly, zero flip timeouts).
+   - `hyprctl monitors`: `1280x2856@120.00000 at 0x0`, physical size `66x147 mm`, `scale: 2.6666667`, `availableModes: 1280x2856@120.00Hz 1280x2856@60.00Hz`; owner visually confirmed noticeably smoother 120 Hz rendering.
+   - **Backlight (`/sys/class/backlight/19440000.dsi.0`):** `1209 -> 300 -> 2400 -> 0 -> 1209` verified via `actual_brightness` (`max_brightness=3271`). Note: udev autoloaded `panel-google-cm4` at `3.818s` (before `omamobile-caiman-graphics.service` enabled `allow_tx=1`), logging one harmless `-1` (`-EPERM`) backlight init attempt while `cm4_bl_update_status` preserved the level (`1209`).
+   - **DPMS (`screen_off=2`):** Verified `hl.dsp.dpms({ action = "enable" / "disable" / "enable" })`: toggled `dpms=On -> Off -> On`, dropped to `60 Hz` with panel sleep (`gs-decon-fs` stopped at `5394`), and woke cleanly back to `120 Hz` (`5394 -> 5578`).
+3. **Boot #2 Verification (Persistence):**
+   - Clean `systemctl reboot` came up on `7.3.0-rc6-omamobile-push1-gf71678d09eda` with `omamobile-device-caiman` `0.3.0-1`, `omamobile-caiman-graphics.service` `active`, `marker-cleared`, `/dev/dri/card2`, `allow_tx=Y`, `actual_brightness=1209`, `1280x2856@120.00000`, `dpms=On`, and `gs-decon-fs`/`fd` interrupts (`1822`/`1821`) ticking cleanly.
