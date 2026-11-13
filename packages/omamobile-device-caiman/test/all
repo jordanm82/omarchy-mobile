@@ -74,17 +74,24 @@ pass "reboot-to compiles"
 
 ./install "$tmp/root" "$tmp/build"
 for f in usr/bin/reboot-to \
+         usr/bin/omamobile-bt-addr \
+         usr/bin/omamobile-caiman-charge-limit \
          usr/bin/omamobile-caiman-graphics-start \
          usr/lib/modprobe.d/omamobile-caiman-clk-acpm.conf \
          usr/lib/modprobe.d/omamobile-caiman-display.conf \
          usr/lib/modprobe.d/omamobile-caiman-guards.conf \
          usr/lib/udev/rules.d/10-omamobile-storage.rules \
+         usr/lib/udev/rules.d/20-omamobile-torch.rules \
+         usr/lib/udev/rules.d/72-omamobile-feedbackd.rules \
+         usr/lib/udev/rules.d/75-omamobile-caiman-charger.rules \
+         usr/lib/udev/rules.d/80-omamobile-bt-addr.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-caiman.conf \
          usr/lib/systemd/system/display-manager.service.d/10-omamobile-caiman.conf \
+         usr/lib/systemd/system/omamobile-bt-addr@.service \
          usr/lib/systemd/system/omamobile-caiman-graphics.service \
          usr/share/uwsm/env.d/omamobile-caiman-graphics \
          usr/share/omamobile/device.conf \
@@ -93,17 +100,25 @@ for f in usr/bin/reboot-to \
          etc/pacman.d/omamobile-mirrorlist; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
+for b in usr/bin/reboot-to usr/bin/omamobile-bt-addr \
+         usr/bin/omamobile-caiman-charge-limit usr/bin/omamobile-caiman-graphics-start; do
+  [[ -x $tmp/root/$b ]] || fail "$b must be installed executable"
+done
+[[ ! -x $tmp/root/usr/lib/modprobe.d/omamobile-caiman-guards.conf \
+   && ! -x $tmp/root/usr/lib/systemd/system/omamobile-caiman-graphics.service \
+   && ! -x $tmp/root/usr/lib/udev/rules.d/75-omamobile-caiman-charger.rules ]] \
+  || fail "non-script vendor files must not be executable"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-caiman-graphics.service") == ../omamobile-caiman-graphics.service ]] \
   || fail "omamobile-caiman-graphics.service is enabled by a vendor wants link"
-[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 19 ]] \
-  || fail "install stages expected 19 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
+[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 26 ]] \
+  || fail "install stages expected 26 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
 grep -qx 'ConditionPathExists=!/usr/share/omamobile/device-caiman/version' \
   "$tmp/root/usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-caiman.conf" \
   || fail "module cleanup guard missing"
-grep -qx 'blacklist panthor' "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-guards.conf" \
-  || fail "panthor must be blacklisted for autoload"
-grep -qx 'blacklist gs_decon' "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-guards.conf" \
-  || fail "gs_decon must be blacklisted for autoload"
+for mod in panthor gs_decon cs40l26_vibra leds_lm3644 max77779_battery hci_uart nxp_nci_i2c; do
+  grep -qx "blacklist $mod" "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-guards.conf" \
+    || fail "$mod must be blacklisted for autoload"
+done
 grep -qx 'options gs_decon max_refresh=120 screen_off=2' \
   "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-display.conf" \
   || fail "gs_decon display options missing"
@@ -118,6 +133,12 @@ grep -q 'KERNEL=="sda", MODE="0000"' "$tmp/root/usr/lib/udev/rules.d/10-omamobil
   || fail "the whole-disk node is made inaccessible"
 grep -q 'ID_PART_ENTRY_NAME}!="userdata"' "$tmp/root/usr/lib/udev/rules.d/10-omamobile-storage.rules" \
   || fail "userdata is the only partition desktop tools may see"
+grep -q 'SUBSYSTEM=="power_supply", KERNEL=="max77779-charger",.*omamobile-caiman-charge-limit' \
+  "$tmp/root/usr/lib/udev/rules.d/75-omamobile-caiman-charger.rules" \
+  || fail "charger udev rule missing"
+grep -q 'SUBSYSTEM=="bluetooth", KERNEL=="hci\[0-9\]\*",.*omamobile-bt-addr' \
+  "$tmp/root/usr/lib/udev/rules.d/80-omamobile-bt-addr.rules" \
+  || fail "bluetooth address udev rule missing"
 grep -q 'Address=172.16.42.1/24' "$tmp/root/usr/lib/systemd/network/20-usb-gadget.network" \
   || fail "usb0 keeps the initramfs address"
 power="$tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
@@ -135,18 +156,26 @@ for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
               usr/bin/omamobile-camera-start; do
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
-pass "install stages expected package files and guards without slot marking, radio, charger, or camera"
+pass "install stages expected package files, modes, and guards without slot marking, radio, or camera"
 
 # Exercise graphics-start in a scratch root: marker block, --retry recovery,
 # panthor + gs_decon bind, allow_tx gating, card preference, and failure/skip cases.
 fake=$tmp/fake
 fbin=$tmp/fbin
 tlog=$tmp/calls
+dt="$fake/proc/device-tree/soc"
 mkdir -p "$fake/sys/bus/platform/devices/1f000000.gpu" \
          "$fake/sys/bus/platform/devices/19470000.display-controller" \
          "$fake/sys/bus/platform/drivers/panthor" \
          "$fake/sys/bus/platform/drivers/gs-decon" \
+         "$dt/usi@10c900c0/i2c@10c90000/haptic-driver@43" \
+         "$dt/soc-unused" \
+         "$dt/usi@108b00c0/i2c@108b0000/led-controller@63" \
+         "$dt/usi@108d00c0/i2c@108d0000/fuel-gauge@36" \
+         "$dt/usi@155d00c0/serial@155d0000/bluetooth" \
+         "$dt/usi@10c900c0/i2c@10c90000/nfc@8" \
          "$fake/dev/dri/by-path" "$fake/proc" "$fbin"
+rm -rf "$dt/soc-unused"
 : > "$fake/dev/dri/card0"
 ln -s ../card0 "$fake/dev/dri/by-path/platform-chosen:framebuffer-card"
 cat > "$fbin/modprobe" <<EOF
@@ -161,6 +190,14 @@ case \$1 in
     ln -sfn ../card1 "$fake/dev/dri/by-path/platform-19470000.display-controller-card"
     ln -sfn "$fake/sys/bus/platform/drivers/gs-decon" "$fake/sys/bus/platform/devices/19470000.display-controller/driver"
     set -- "\$@" "allow_tx=\$(cat "$fake/sys/module/gs_dsim_cmd/parameters/allow_tx" 2>/dev/null || echo none)" ;;
+  leds_lm3644)
+    mkdir -p "$fake/sys/class/leds/white:torch"
+    echo "\${TORCH_INIT_BRIGHTNESS:-0}" > "$fake/sys/class/leds/white:torch/brightness" ;;
+  max77779_battery)
+    mkdir -p "$fake/sys/class/power_supply/max77779-battery"
+    echo 87 > "$fake/sys/class/power_supply/max77779-battery/capacity" ;;
+  nxp_nci_i2c)
+    [[ \${NO_NFC_DEV:-0} == 1 ]] || mkdir -p "$fake/sys/class/nfc/nfc0" ;;
 esac
 echo "\$*" >> "$tlog"
 EOF
@@ -168,19 +205,43 @@ printf '#!/bin/bash\necho synced >> "%s"\n' "$tlog" > "$fbin/sync"
 printf '#!/bin/bash\nexit 0\n' > "$fbin/sleep"
 chmod +x "$fbin/"*
 
+periph_dt_disable() {
+  for n in "$dt/usi@10c900c0/i2c@10c90000/haptic-driver@43" \
+           "$dt/usi@108b00c0/i2c@108b0000/led-controller@63" \
+           "$dt/usi@108d00c0/i2c@108d0000/fuel-gauge@36" \
+           "$dt/usi@155d00c0/serial@155d0000/bluetooth" \
+           "$dt/usi@10c900c0/i2c@10c90000/nfc@8"; do
+    printf 'disabled\0' > "$n/status"
+  done
+  rm -f "$dt/usi@10c900c0/i2c@10c90000/nfc@8/clocks"
+}
+periph_dt_enable() {
+  for n in "$dt/usi@10c900c0/i2c@10c90000/haptic-driver@43" \
+           "$dt/usi@108b00c0/i2c@108b0000/led-controller@63" \
+           "$dt/usi@108d00c0/i2c@108d0000/fuel-gauge@36" \
+           "$dt/usi@155d00c0/serial@155d0000/bluetooth" \
+           "$dt/usi@10c900c0/i2c@10c90000/nfc@8"; do
+    printf 'okay\0' > "$n/status"
+  done
+  : > "$dt/usi@10c900c0/i2c@10c90000/nfc@8/clocks"
+}
+
 reset_gfx() {
   : > "$tlog"
   rm -rf "$fake/var/lib/omamobile/caiman-graphics-started" \
          "$fake/sys/bus/platform/devices/1f000000.gpu/driver" \
          "$fake/sys/bus/platform/devices/19470000.display-controller/driver" \
          "$fake/sys/module" "$fake/run" "$fake/dev/dri/card1" \
-         "$fake/dev/dri/by-path/platform-19470000.display-controller-card"
+         "$fake/dev/dri/by-path/platform-19470000.display-controller-card" \
+         "$fake/sys/class/leds" "$fake/sys/class/power_supply" "$fake/sys/class/nfc"
+  periph_dt_disable
   echo "console=null ${1:+exynos_drm.panel_name=$1 }mem_sleep_default=s2idle" > "$fake/proc/cmdline"
 }
 loads() { grep -v '^synced$' "$tlog" | cut -d' ' -f1 | tr '\n' ' ' | sed 's/ $//'; }
 
-# 1. Existing marker blocks both GPU and display until --retry, while still publishing simpledrm.
+# 1. Existing marker blocks GPU, display, and peripherals until --retry, while still publishing simpledrm.
 reset_gfx google-cm4
+periph_dt_enable
 mkdir -p "$fake/var/lib/omamobile"
 echo "2026-11-13 gpu" > "$fake/var/lib/omamobile/caiman-graphics-started"
 PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start" >/dev/null
@@ -189,6 +250,9 @@ PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-ca
 [[ $(cat "$fake/run/omamobile-caiman-display-card") == /dev/dri/card0 ]] || fail "marker block must still publish simpledrm display card"
 
 # 2. --retry clears marker, sets allow_tx=1 for google-cm4 before gs_decon stage=2 fbdev=0, prefers gs-decon card1.
+reset_gfx google-cm4
+mkdir -p "$fake/var/lib/omamobile"
+echo "2026-11-13 gpu" > "$fake/var/lib/omamobile/caiman-graphics-started"
 out=$(PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start" --retry)
 [[ ! -e $fake/var/lib/omamobile/caiman-graphics-started ]] || fail "--retry must clear marker on success"
 [[ $(loads) == "panthor gs_dsim_cmd gs_decon" ]] || fail "unexpected load order: $(loads)"
@@ -222,7 +286,25 @@ out=$(FAIL_MODULE=gs_decon PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tm
 [[ ! -e $fake/var/lib/omamobile/caiman-graphics-started ]] || fail "failed display must clear marker"
 [[ -s $fake/run/omamobile-caiman-gpu-ready.json && $(cat "$fake/run/omamobile-caiman-display-card") == /dev/dri/card0 ]] || fail "failed display must preserve GPU and simpledrm fallback"
 
-# 5. Missing DTB nodes skip cleanly.
+# 5. Stage 6 peripherals load in order when enabled; torch resets lit state; NFC requires DT clocks.
+reset_gfx google-cm4
+periph_dt_enable
+out=$(PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start")
+[[ $(loads) == "panthor gs_dsim_cmd gs_decon cs40l26_vibra leds_lm3644 max77779_battery hci_uart nxp_nci_i2c" ]] \
+  || fail "unexpected full load order: $(loads)"
+[[ $out == *"up: GPU, display, haptics, torch, gauge 87 %, Bluetooth, NFC"* ]] \
+  || fail "missing peripheral summary: $out"
+
+reset_gfx google-cm4
+periph_dt_enable
+rm -f "$dt/usi@10c900c0/i2c@10c90000/nfc@8/clocks"
+out=$(TORCH_INIT_BRIGHTNESS=64 PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start") && fail "lit torch must report skip/failure"
+[[ $(cat "$fake/sys/class/leds/white:torch/brightness") == 0 ]] || fail "lit torch must be turned off"
+[[ $out == *"the torch came up lit; turned off"* && $out == *"no NFC with its clock in this DTB; skipped"* ]] \
+  || fail "unexpected torch/NFC guard output: $out"
+[[ $(loads) != *nxp_nci_i2c* ]] || fail "NFC without clocks property must not load nxp_nci_i2c"
+
+# 6. Missing DTB nodes skip cleanly.
 reset_gfx google-cm4
 mv "$fake/sys/bus/platform/devices/19470000.display-controller" "$tmp/decon"
 out=$(PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start")
@@ -236,7 +318,9 @@ out=$(PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamob
 [[ -z $(loads) && $out == *"nothing to do"* ]] || fail "missing both nodes must do nothing: $out"
 mv "$tmp/gpu" "$fake/sys/bus/platform/devices/1f000000.gpu"
 mv "$tmp/decon" "$fake/sys/bus/platform/devices/19470000.display-controller"
-pass "hang-safe graphics start honors marker, --retry, allow_tx, gs_decon, and card discovery"
+pass "hang-safe graphics start honors marker, --retry, allow_tx, gs_decon, peripherals, and card discovery"
+
+./test/charge-limit
 
 net=vendor/systemd/network/20-usb-gadget.network
 ! sed -n '/^\[Network\]/,/^\[/p' "$net" | grep -c '^Gateway=' >/dev/null || fail "usb0 sets no default route in [Network] (metric 0)"

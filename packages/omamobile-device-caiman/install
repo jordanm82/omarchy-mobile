@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Stage omamobile-device-caiman into DESTDIR. Nothing is enabled that would
-# mark a slot successful or start the radio, the charger, or a camera.
+# mark a slot successful or start the radio or a camera.
 #   ./install DESTDIR [BUILDDIR]
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
@@ -12,11 +12,11 @@ stage() {
   install -d "$(dirname -- "$3")"
   install -m"$1" "$2" "$3"
 }
+for file in bin/*; do stage 755 "$file" "$destination/usr/bin/${file##*/}"; done
 stage 755 "$build/reboot-to" "$destination/usr/bin/reboot-to"
-stage 755 bin/omamobile-caiman-graphics-start "$destination/usr/bin/omamobile-caiman-graphics-start"
 while IFS= read -r -d '' file; do
   mode=644
-  [[ -x $file ]] && mode=755
+  [[ $file == vendor/systemd/system-sleep/* ]] && mode=755
   stage "$mode" "$file" "$destination/usr/lib/${file#vendor/}"
 done < <(find vendor -type f -print0)
 while IFS= read -r -d '' file; do
