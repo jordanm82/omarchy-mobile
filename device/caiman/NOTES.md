@@ -41,6 +41,13 @@ fastboot getvar <name>                 # named variables only; never fastboot ge
 fastboot flashing get_unlock_ability
 ```
 
+## 2026-11-13: Stage 3 — Hardware buttons (`gate f`) and Synaptics `S3908TG` touchscreen (`gate g`)
+
+Built `7.3.0-rc6-omamobile-push1-g91ad3d566a6c` (`91ad3d566` on `omamobile-zumapro-caiman-input`, enabling `gpio-keys`, `&gpa4`/`&gpa6`/`&gpn0` bank EINTs, `touch_avdd`/`touch_vdd`, `touch_reset_held` on `&usi2_hsi0`, and `touchscreen@0` on `&spi20`), pushed its modules alongside M2.7's `33549ee80` module tree via `bin/omamobile modules-push`, and flashed Slot B's 5 boot images (`slot-retry-count:b` refreshed `2 → 3`, Slot A untouched) ([BRINGUP-M3.md](BRINGUP-M3.md)):
+
+- **Hardware buttons (`gate f`)** `[V]` (`R/`, `/proc/bus/input/devices` + `/proc/interrupts` + owner test): `gpio-keys` registered as `input1` (`kbd event1`) with edge IRQs `Power` (`gpa4 0`), `Volume Down` (`gpa4 1`), and `Volume Up` (`gpa6 2`); physical presses incremented interrupt counts (`Power: 10`, `Volume Down: 2`, `Volume Up: 6`) and functioned normally in Hyprland, with `/sys/power/mem_sleep` reading `[s2idle] deep`.
+- **Synaptics `S3908TG` SPI touchscreen (`gate g`)** `[V]` (`R/`, `dmesg` + `sysfs` + `hyprctl devices` + owner test): `touch-avdd` (`3300000 uV`, `ldo4m`) and `touch-vdd` (`1800000 uV`, `ldo25m`) enabled cleanly; `synaptics-tcm spi0.0` identified `S3908GA1B0-15.0, TouchComm v1, build 4432698` (app fw `0x0001`, `12800x28560`) and registered `input0` (`event0`, `ABS_MT_POSITION_X` `0..12799` res `193`, `ABS_MT_POSITION_Y` `0..28559` res `194`, active area `66x147 mm`). `gpn0` level IRQ incremented (`564`), Hyprland bound `synaptics-touchcomm-touchscreen`, and the owner confirmed accurate touch tracking, lock-screen swipe + PIN unlock, desktop navigation, and on-screen keyboard input. `tools/phone-smoke` (`up 2886s`, `systemctl is-system-running` `running`, `0` failed systemd units, thermal `42 °C`) reported `ok` on `boot`, `storage guard`, `root`, `kernel health` (`0` oops, `0` WARN; same 6 `zumapro.dtsi` `samsung-pinctrl` non-ALIVE IRQ messages), `USB gadget`, `display`, `session`, `lock`, `touch`, and `buttons`.
+
 ## 2026-11-13: Stage 2 — UFS 4.0 behind the storage guard (`gate c`), NV backups, and persistent Omarchy Mobile on `userdata` (`gate d` & `gate e`)
 
 Built `7.3.0-rc6-omamobile-push1-g33549ee804eb` (`33549ee80`, enabling `ufs_vcc` on `gpp0-1`, `&ufs`, and `&ufs_phy` in `zumapro-caiman.dts`) and `omamobile-device-caiman` `0.1.0-1` ([BRINGUP-M2.md](BRINGUP-M2.md)):
