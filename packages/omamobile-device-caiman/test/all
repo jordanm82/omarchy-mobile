@@ -76,6 +76,7 @@ pass "reboot-to compiles"
 for f in usr/bin/reboot-to \
          usr/bin/omamobile-caiman-graphics-start \
          usr/lib/modprobe.d/omamobile-caiman-clk-acpm.conf \
+         usr/lib/modprobe.d/omamobile-caiman-display.conf \
          usr/lib/modprobe.d/omamobile-caiman-guards.conf \
          usr/lib/udev/rules.d/10-omamobile-storage.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
@@ -94,13 +95,18 @@ for f in usr/bin/reboot-to \
 done
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-caiman-graphics.service") == ../omamobile-caiman-graphics.service ]] \
   || fail "omamobile-caiman-graphics.service is enabled by a vendor wants link"
-[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 18 ]] \
-  || fail "install stages expected 18 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
+[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 19 ]] \
+  || fail "install stages expected 19 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
 grep -qx 'ConditionPathExists=!/usr/share/omamobile/device-caiman/version' \
   "$tmp/root/usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-caiman.conf" \
   || fail "module cleanup guard missing"
 grep -qx 'blacklist panthor' "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-guards.conf" \
   || fail "panthor must be blacklisted for autoload"
+grep -qx 'blacklist gs_decon' "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-guards.conf" \
+  || fail "gs_decon must be blacklisted for autoload"
+grep -qx 'options gs_decon max_refresh=120 screen_off=2' \
+  "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-display.conf" \
+  || fail "gs_decon display options missing"
 grep -qx 'options clk_acpm zumapro_gpu_max_khz=890000' \
   "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-clk-acpm.conf" \
   || fail "clk_acpm max GPU clock missing"
@@ -132,30 +138,105 @@ done
 pass "install stages expected package files and guards without slot marking, radio, charger, or camera"
 
 # Exercise graphics-start in a scratch root: marker block, --retry recovery,
-# panthor bind, and simpledrm fallback card discovery.
+# panthor + gs_decon bind, allow_tx gating, card preference, and failure/skip cases.
 fake=$tmp/fake
 fbin=$tmp/fbin
+tlog=$tmp/calls
 mkdir -p "$fake/sys/bus/platform/devices/1f000000.gpu" \
+         "$fake/sys/bus/platform/devices/19470000.display-controller" \
          "$fake/sys/bus/platform/drivers/panthor" \
-         "$fake/dev/dri/by-path" "$fbin"
+         "$fake/sys/bus/platform/drivers/gs-decon" \
+         "$fake/dev/dri/by-path" "$fake/proc" "$fbin"
 : > "$fake/dev/dri/card0"
 ln -s ../card0 "$fake/dev/dri/by-path/platform-chosen:framebuffer-card"
 cat > "$fbin/modprobe" <<EOF
 #!/bin/bash
-ln -sfn "$fake/sys/bus/platform/drivers/panthor" "$fake/sys/bus/platform/devices/1f000000.gpu/driver"
+set -euo pipefail
+[[ \${FAIL_MODULE:-} != "\$1" ]] || { echo "\$*" >> "$tlog"; exit 1; }
+case \$1 in
+  panthor) ln -sfn "$fake/sys/bus/platform/drivers/panthor" "$fake/sys/bus/platform/devices/1f000000.gpu/driver" ;;
+  gs_dsim_cmd) p="$fake/sys/module/gs_dsim_cmd/parameters"; [[ -e \$p/allow_tx ]] || { mkdir -p "\$p"; echo 0 > "\$p/allow_tx"; } ;;
+  gs_decon)
+    : > "$fake/dev/dri/card1"
+    ln -sfn ../card1 "$fake/dev/dri/by-path/platform-19470000.display-controller-card"
+    ln -sfn "$fake/sys/bus/platform/drivers/gs-decon" "$fake/sys/bus/platform/devices/19470000.display-controller/driver"
+    set -- "\$@" "allow_tx=\$(cat "$fake/sys/module/gs_dsim_cmd/parameters/allow_tx" 2>/dev/null || echo none)" ;;
+esac
+echo "\$*" >> "$tlog"
 EOF
-chmod +x "$fbin/modprobe"
+printf '#!/bin/bash\necho synced >> "%s"\n' "$tlog" > "$fbin/sync"
+printf '#!/bin/bash\nexit 0\n' > "$fbin/sleep"
+chmod +x "$fbin/"*
 
+reset_gfx() {
+  : > "$tlog"
+  rm -rf "$fake/var/lib/omamobile/caiman-graphics-started" \
+         "$fake/sys/bus/platform/devices/1f000000.gpu/driver" \
+         "$fake/sys/bus/platform/devices/19470000.display-controller/driver" \
+         "$fake/sys/module" "$fake/run" "$fake/dev/dri/card1" \
+         "$fake/dev/dri/by-path/platform-19470000.display-controller-card"
+  echo "console=null ${1:+exynos_drm.panel_name=$1 }mem_sleep_default=s2idle" > "$fake/proc/cmdline"
+}
+loads() { grep -v '^synced$' "$tlog" | cut -d' ' -f1 | tr '\n' ' ' | sed 's/ $//'; }
+
+# 1. Existing marker blocks both GPU and display until --retry, while still publishing simpledrm.
+reset_gfx google-cm4
 mkdir -p "$fake/var/lib/omamobile"
 echo "2026-11-13 gpu" > "$fake/var/lib/omamobile/caiman-graphics-started"
 PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start" >/dev/null
 [[ ! -e $fake/run/omamobile-caiman-gpu-ready.json ]] || fail "existing marker must block GPU load"
+[[ -z $(loads) ]] || fail "existing marker must block all modprobe calls"
 [[ $(cat "$fake/run/omamobile-caiman-display-card") == /dev/dri/card0 ]] || fail "marker block must still publish simpledrm display card"
 
-PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start" --retry >/dev/null
+# 2. --retry clears marker, sets allow_tx=1 for google-cm4 before gs_decon stage=2 fbdev=0, prefers gs-decon card1.
+out=$(PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start" --retry)
 [[ ! -e $fake/var/lib/omamobile/caiman-graphics-started ]] || fail "--retry must clear marker on success"
+[[ $(loads) == "panthor gs_dsim_cmd gs_decon" ]] || fail "unexpected load order: $(loads)"
+grep -q '^gs_decon stage=2 fbdev=0 allow_tx=1$' "$tlog" || fail "gs_decon missing options or allow_tx=1: $(grep '^gs_decon' "$tlog")"
 [[ -s $fake/run/omamobile-caiman-gpu-ready.json ]] || fail "GPU ready json must be created"
-pass "hang-safe graphics start honors marker, --retry, and simpledrm card discovery"
+[[ $(cat "$fake/run/omamobile-caiman-display-card") == /dev/dri/card1 ]] || fail "gs-decon DRM card must override simpledrm"
+[[ $out == *"up: GPU, display"* ]] || fail "missing up summary: $out"
+
+# 3. Suffixed bootloader panel_name (google-cm4.<id>) is also allowed; other/empty panel names stay off.
+reset_gfx google-cm4.12345678
+PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start" >/dev/null
+grep -q '^gs_decon stage=2 fbdev=0 allow_tx=1$' "$tlog" || fail "suffixed google-cm4 must set allow_tx=1"
+
+reset_gfx google-other
+PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start" >/dev/null
+grep -q '^gs_decon stage=2 fbdev=0 allow_tx=0$' "$tlog" || fail "other panel must keep allow_tx=0"
+
+reset_gfx ""
+PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start" >/dev/null
+grep -q '^gs_decon stage=2 fbdev=0 allow_tx=0$' "$tlog" || fail "unnamed panel must keep allow_tx=0"
+
+# 4. Failed GPU still brings up display; failed display keeps GPU + simpledrm fallback and clears marker.
+reset_gfx google-cm4
+out=$(FAIL_MODULE=panthor PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start") && fail "failed GPU must exit non-zero"
+[[ ! -e $fake/var/lib/omamobile/caiman-graphics-started ]] || fail "failed GPU must clear marker"
+[[ ! -e $fake/run/omamobile-caiman-gpu-ready.json ]] || fail "failed GPU must not create ready json"
+[[ $out == *"up: display"* && $(cat "$fake/run/omamobile-caiman-display-card") == /dev/dri/card1 ]] || fail "failed GPU must still bring up display"
+
+reset_gfx google-cm4
+out=$(FAIL_MODULE=gs_decon PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start") && fail "failed display must exit non-zero"
+[[ ! -e $fake/var/lib/omamobile/caiman-graphics-started ]] || fail "failed display must clear marker"
+[[ -s $fake/run/omamobile-caiman-gpu-ready.json && $(cat "$fake/run/omamobile-caiman-display-card") == /dev/dri/card0 ]] || fail "failed display must preserve GPU and simpledrm fallback"
+
+# 5. Missing DTB nodes skip cleanly.
+reset_gfx google-cm4
+mv "$fake/sys/bus/platform/devices/19470000.display-controller" "$tmp/decon"
+out=$(PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start")
+[[ $(loads) == panthor && $out == *"up: GPU"* ]] || fail "missing decon node must still load GPU: $out"
+mv "$tmp/decon" "$fake/sys/bus/platform/devices/19470000.display-controller"
+
+reset_gfx google-cm4
+mv "$fake/sys/bus/platform/devices/1f000000.gpu" "$tmp/gpu"
+mv "$fake/sys/bus/platform/devices/19470000.display-controller" "$tmp/decon"
+out=$(PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start")
+[[ -z $(loads) && $out == *"nothing to do"* ]] || fail "missing both nodes must do nothing: $out"
+mv "$tmp/gpu" "$fake/sys/bus/platform/devices/1f000000.gpu"
+mv "$tmp/decon" "$fake/sys/bus/platform/devices/19470000.display-controller"
+pass "hang-safe graphics start honors marker, --retry, allow_tx, gs_decon, and card discovery"
 
 net=vendor/systemd/network/20-usb-gadget.network
 ! sed -n '/^\[Network\]/,/^\[/p' "$net" | grep -c '^Gateway=' >/dev/null || fail "usb0 sets no default route in [Network] (metric 0)"
