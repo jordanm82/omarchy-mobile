@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Bring up the Pixel 9 Pro GPU (panthor) and resolve the display DRM card at
+# boot, enabled by the vendor multi-user.target.wants link. panthor is
+# blacklisted for autoload (modprobe.d/omamobile-caiman-guards.conf), so this
+# hang-safe script is the only thing that loads it after syncing a marker;
+# if a load hangs, the next boot leaves it off (see the script).
+[Unit]
+Description=Bring up the Pixel 9 Pro GPU (hang-safe)
+After=local-fs.target systemd-modules-load.service
+Before=display-manager.service
+ConditionPathExists=|/sys/bus/platform/devices/1f000000.gpu
+ConditionPathExists=|/sys/bus/platform/devices/19470000.display-controller
+ConditionPathExists=|/sys/bus/platform/devices/chosen:framebuffer
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-caiman-graphics-start
+RemainAfterExit=yes
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

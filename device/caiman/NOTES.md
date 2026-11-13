@@ -41,6 +41,13 @@ fastboot getvar <name>                 # named variables only; never fastboot ge
 fastboot flashing get_unlock_ability
 ```
 
+## 2026-11-13: Stage 4 — Mali-G715 `panthor` GPU and ACPM DVFS (`150`–`890 MHz`)
+
+Built `7.3.0-rc6-omamobile-push1-g93d6322221b1` (`93d632222` on `omamobile-zumapro-caiman-gpu`, adding `<dt-bindings/clock/google,zumapro-acpm.h>`, 13 `gpu_opp` entries `150`–`890 MHz`, `&cmu_g3d`, and `&gpu` to `zumapro-caiman.dts`), installed `omamobile-device-caiman` `0.2.0-1`, pushed `/usr/lib/modules/7.3.0-rc6-omamobile-push1-g93d6322221b1`, and flashed Slot B's 5 boot images (`slot-retry-count:b` refreshed `2 → 3`, Slot A untouched) ([BRINGUP-M4.md](BRINGUP-M4.md)):
+
+- **`panthor` probe and DVFS** `[V]` (`R/`, `dmesg` + `devfreq` + `omamobile-caiman-graphics.service`): `panthor 1f000000.gpu` probed `Mali-G715 id 0xb8a2` (`major 0x1 minor 0x3`, `shader_present=0x1110055`), loaded `mali_csffw.bin` (`CSF FW using interface v2.8.0`), initialized minor 1 (`/dev/dri/card1` + `/dev/dri/renderD128`), and cleared `/var/lib/omamobile/caiman-graphics-started`. With `options clk_acpm zumapro_gpu_max_khz=890000`, `devfreq` exposed all 13 OPPs (`150`–`890 MHz`) under `simple_ondemand` and scaled dynamically across OPPs (`61` transitions, up to `890 MHz`) under UI load.
+- **Compositor rendering and two-boot persistence** `[V]` (`R/`, `hyprland.log` + `tools/phone-smoke`): `omamobile-caiman-graphics.service` exited `0/SUCCESS` before `display-manager.service`, exporting `AQ_DRM_DEVICES=/dev/dri/card0` while Aquamarine selected `/dev/dri/renderD128` (`OpenGL ES 3.1 Mesa 26.2.4-arch1.1.4.omamobile4`, `Renderer: Mali-G715 MC7 (Panfrost)`). Frame presentation still runs through `simpledrm` at `1280x2856@60Hz` until Stage 5 KMS (`gs-decon` + `panel-google-cm4`), so animation cadence improves over `llvmpipe` without full `120 Hz` vsync yet. Both Boot #1 and Boot #2 (`slot-retry-count:b: 3`) reached `systemctl is-system-running` = `running` with **0 failed units**, `linux-modules-cleanup.service` skipped with all three module trees preserved, and `tools/phone-smoke` reported `GPU: ok (render node on panthor)` alongside all required checks `ok`.
+
 ## 2026-11-13: Stage 3 — Hardware buttons (`gate f`) and Synaptics `S3908TG` touchscreen (`gate g`)
 
 Built `7.3.0-rc6-omamobile-push1-g91ad3d566a6c` (`91ad3d566` on `omamobile-zumapro-caiman-input`, enabling `gpio-keys`, `&gpa4`/`&gpa6`/`&gpn0` bank EINTs, `touch_avdd`/`touch_vdd`, `touch_reset_held` on `&usi2_hsi0`, and `touchscreen@0` on `&spi20`), pushed its modules alongside M2.7's `33549ee80` module tree via `bin/omamobile modules-push`, and flashed Slot B's 5 boot images (`slot-retry-count:b` refreshed `2 → 3`, Slot A untouched) ([BRINGUP-M3.md](BRINGUP-M3.md)):

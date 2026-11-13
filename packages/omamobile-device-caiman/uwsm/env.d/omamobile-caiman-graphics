@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# The session's side of omamobile-caiman-graphics-start, sourced by uwsm from
+# /usr/share/uwsm/env.d (POSIX shell; ~/.config/uwsm/env runs after it).
+# AQ_DRM_DEVICES points Hyprland's Aquamarine backend at the display DRM card
+# (simpledrm during M4 or gs-decon once enabled), whichever card number it
+# got; hardware GL is enabled only when panthor opened /dev/dri/renderD128 and
+# wrote /run/omamobile-caiman-gpu-ready.json, otherwise software llvmpipe.
+if [ -r /run/omamobile-caiman-display-card ]; then
+  read -r caiman_display_card < /run/omamobile-caiman-display-card
+  case "$caiman_display_card" in
+    /dev/dri/card[0-9]*)
+      if [ -c "$caiman_display_card" ]; then
+        export AQ_DRM_DEVICES="$caiman_display_card"
+      fi
+      ;;
+  esac
+  unset caiman_display_card
+fi
+if [ -c /dev/dri/renderD128 ] && [ -s /run/omamobile-caiman-gpu-ready.json ]; then
+  export LIBGL_ALWAYS_SOFTWARE=0
+  unset GALLIUM_DRIVER QT_QUICK_BACKEND
+  export QSG_RHI_BACKEND=opengl
+else
+  export LIBGL_ALWAYS_SOFTWARE=1
+  export GALLIUM_DRIVER=llvmpipe
+  export QT_QUICK_BACKEND=software
+  unset QSG_RHI_BACKEND
+fi
