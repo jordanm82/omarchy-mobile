@@ -115,7 +115,7 @@ done
 grep -qx 'ConditionPathExists=!/usr/share/omamobile/device-caiman/version' \
   "$tmp/root/usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-caiman.conf" \
   || fail "module cleanup guard missing"
-for mod in panthor gs_decon cs40l26_vibra leds_lm3644 max77779_battery hci_uart nxp_nci_i2c; do
+for mod in panthor gs_decon cs40l26_vibra leds_lm3644 max77779_battery phy_zuma_pcie pcie_gs201 brcmfmac hci_uart nxp_nci_i2c; do
   grep -qx "blacklist $mod" "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-guards.conf" \
     || fail "$mod must be blacklisted for autoload"
 done
@@ -196,6 +196,10 @@ case \$1 in
   max77779_battery)
     mkdir -p "$fake/sys/class/power_supply/max77779-battery"
     echo 87 > "$fake/sys/class/power_supply/max77779-battery/capacity" ;;
+  pcie_gs201)
+    mkdir -p "$fake/sys/bus/pci/devices/0000:01:00.0" ;;
+  brcmfmac)
+    mkdir -p "$fake/sys/class/net/wlp1s0" ;;
   nxp_nci_i2c)
     [[ \${NO_NFC_DEV:-0} == 1 ]] || mkdir -p "$fake/sys/class/nfc/nfc0" ;;
 esac
@@ -214,6 +218,9 @@ periph_dt_disable() {
     printf 'disabled\0' > "$n/status"
   done
   rm -f "$dt/usi@10c900c0/i2c@10c90000/nfc@8/clocks"
+  rm -rf "$fake/sys/bus/platform/devices/13120000.pcie" \
+         "$fake/proc/device-tree/reserved-memory/wifi-dma-pool" \
+         "$fake/usr/lib/firmware"
 }
 periph_dt_enable() {
   for n in "$dt/usi@10c900c0/i2c@10c90000/haptic-driver@43" \
@@ -224,6 +231,10 @@ periph_dt_enable() {
     printf 'okay\0' > "$n/status"
   done
   : > "$dt/usi@10c900c0/i2c@10c90000/nfc@8/clocks"
+  mkdir -p "$fake/sys/bus/platform/devices/13120000.pcie" \
+           "$fake/proc/device-tree/reserved-memory/wifi-dma-pool" \
+           "$fake/usr/lib/firmware/updates/brcm"
+  : > "$fake/usr/lib/firmware/updates/brcm/brcmfmac4390b1-pcie.google,zumapro-caiman.bin"
 }
 
 reset_gfx() {
@@ -231,9 +242,10 @@ reset_gfx() {
   rm -rf "$fake/var/lib/omamobile/caiman-graphics-started" \
          "$fake/sys/bus/platform/devices/1f000000.gpu/driver" \
          "$fake/sys/bus/platform/devices/19470000.display-controller/driver" \
+         "$fake/sys/bus/pci/devices/0000:01:00.0" \
          "$fake/sys/module" "$fake/run" "$fake/dev/dri/card1" \
          "$fake/dev/dri/by-path/platform-19470000.display-controller-card" \
-         "$fake/sys/class/leds" "$fake/sys/class/power_supply" "$fake/sys/class/nfc"
+         "$fake/sys/class/leds" "$fake/sys/class/power_supply" "$fake/sys/class/net" "$fake/sys/class/nfc"
   periph_dt_disable
   echo "console=null ${1:+exynos_drm.panel_name=$1 }mem_sleep_default=s2idle" > "$fake/proc/cmdline"
 }
@@ -286,13 +298,13 @@ out=$(FAIL_MODULE=gs_decon PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tm
 [[ ! -e $fake/var/lib/omamobile/caiman-graphics-started ]] || fail "failed display must clear marker"
 [[ -s $fake/run/omamobile-caiman-gpu-ready.json && $(cat "$fake/run/omamobile-caiman-display-card") == /dev/dri/card0 ]] || fail "failed display must preserve GPU and simpledrm fallback"
 
-# 5. Stage 6 peripherals load in order when enabled; torch resets lit state; NFC requires DT clocks.
+# 5. Stage 6 peripherals load in order (Wi-Fi before Bluetooth); torch resets lit state; NFC requires DT clocks.
 reset_gfx google-cm4
 periph_dt_enable
 out=$(PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamobile-caiman-graphics-start")
-[[ $(loads) == "panthor gs_dsim_cmd gs_decon cs40l26_vibra leds_lm3644 max77779_battery hci_uart nxp_nci_i2c" ]] \
+[[ $(loads) == "panthor gs_dsim_cmd gs_decon cs40l26_vibra leds_lm3644 max77779_battery phy_zuma_pcie pcie_gs201 brcmfmac hci_uart nxp_nci_i2c" ]] \
   || fail "unexpected full load order: $(loads)"
-[[ $out == *"up: GPU, display, haptics, torch, gauge 87 %, Bluetooth, NFC"* ]] \
+[[ $out == *"up: GPU, display, haptics, torch, gauge 87 %, Wi-Fi (wlp1s0), Bluetooth, NFC"* ]] \
   || fail "missing peripheral summary: $out"
 
 reset_gfx google-cm4

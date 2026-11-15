@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Bring up the Pixel 9 Pro's GPU, display, haptics, torch, battery gauge,
-# Bluetooth controller and NFC at boot, hang-safe. All seven drivers are
+# Wi-Fi, Bluetooth controller and NFC at boot, hang-safe. All ten drivers are
 # blacklisted for autoload (modprobe.d/omamobile-caiman-guards.conf), so this
 # script loads them in order after writing and syncing a marker. If a step
 # fails and returns, the failure is logged and skipped so simpledrm (when
@@ -37,6 +37,9 @@ gauge_node=$dt/soc/usi@108d00c0/i2c@108d0000/fuel-gauge@36
 bluetooth_node=$dt/soc/usi@155d00c0/serial@155d0000/bluetooth
 nfc_node=$dt/soc/usi@10c900c0/i2c@10c90000/nfc@8
 nfc=$root/sys/class/nfc/nfc0
+wifi_pcie=$root/sys/bus/platform/devices/13120000.pcie
+wifi_pool=$dt/reserved-memory/wifi-dma-pool
+wifi_fw=$root/usr/lib/firmware/updates/brcm/brcmfmac4390b1-pcie.google,zumapro-caiman.bin
 
 log() { echo "omamobile-caiman-graphics: $*"; }
 loaded() { [[ -d $root/sys/module/$1 ]]; }
@@ -88,7 +91,7 @@ esac
 mkdir -p "$state" "$root/run"
 
 if [[ -e $marker ]]; then
-  log "the last start ($(cat "$marker" 2>/dev/null)) never finished; GPU, display, haptics, torch, gauge, Bluetooth and NFC stay off this boot."
+  log "the last start ($(cat "$marker" 2>/dev/null)) never finished; GPU, display, haptics, torch, gauge, Wi-Fi, Bluetooth and NFC stay off this boot."
   log "after checking the previous boot's log, retry with: omamobile-caiman-graphics-start --retry"
   resolve_display_card || true
   exit 0
@@ -197,6 +200,34 @@ if enabled "$gauge_node"; then
   fi
 else
   log "no fuel gauge in this DTB; skipped"
+fi
+
+# Wi-Fi (BCM4390/5 on PCIe channel 1) MUST load and boot fw_bcmdhd before
+# hci_uart runs btbcm_patchram on BCM4390B1: the Bluetooth core shares the
+# WLAN radio and times out HCI 0xfc18 (-110) if loaded ahead of brcmfmac.
+if [[ -e $wifi_pcie && -e $wifi_pool && -e $wifi_fw ]]; then
+  phase wifi
+  failed_host=
+  for m in phy_zuma_pcie pcie_gs201; do modprobe "$m" || { failed_host=$m; break; }; done
+  if [[ -n $failed_host ]]; then
+    skip Wi-Fi "$failed_host failed (see dmesg)"
+  else
+    for _ in $(seq 20); do [[ -e $root/sys/bus/pci/devices/0000:01:00.0 ]] && break; sleep 0.25; done
+    if [[ ! -e $root/sys/bus/pci/devices/0000:01:00.0 ]]; then
+      skip Wi-Fi "no Wi-Fi endpoint on the PCIe link (see dmesg)"
+    elif ! modprobe brcmfmac; then
+      skip Wi-Fi "brcmfmac failed (see dmesg)"
+    else
+      wl=
+      for _ in $(seq 60); do
+        for d in "$root"/sys/class/net/wl*; do [[ -e $d ]] && wl=${d##*/} && break; done
+        [[ -n $wl ]] && break; sleep 0.5
+      done
+      if [[ -n $wl ]]; then up+="${up:+, }Wi-Fi ($wl)"; else skip Wi-Fi "brcmfmac brought up no interface (see dmesg)"; fi
+    fi
+  fi
+else
+  log "no Wi-Fi host, DMA pool or BCM4390B1 firmware in this boot; skipped"
 fi
 
 # The address and the power-on are omamobile-bt-addr@'s, started by udev.
