@@ -118,10 +118,12 @@ done
   || fail "omamobile-caiman-graphics.service is enabled by a vendor wants link"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-caiman-aoc.service") == ../omamobile-caiman-aoc.service ]] \
   || fail "omamobile-caiman-aoc.service is enabled by a vendor wants link"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service") == /usr/lib/systemd/system/omamobile-speaker-protection.service ]] \
+  || fail "omamobile-speaker-protection.service is enabled by a vendor wants link"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/omamobile-aoc.service") == omamobile-caiman-aoc.service ]] \
   || fail "omamobile-aoc.service must alias omamobile-caiman-aoc.service"
-[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 31 ]] \
-  || fail "install stages expected 31 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
+[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 32 ]] \
+  || fail "install stages expected 32 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
 grep -qx 'ConditionPathExists=!/usr/share/omamobile/device-caiman/version' \
   "$tmp/root/usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-caiman.conf" \
   || fail "module cleanup guard missing"

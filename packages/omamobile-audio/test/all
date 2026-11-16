@@ -11,7 +11,7 @@ tmp=$(mktemp -d); [[ -n ${KEEP:-} ]] || trap 'rm -rf "$tmp"' EXIT; [[ -z ${KEEP:
 here=$PWD
 
 bash -n bin/omamobile-speaker-protection || fail "the script parses"
-for f in bin/omamobile-speaker-eq lib/speaker_response.py test/fake-pw; do
+for f in bin/omamobile-speaker-eq lib/speaker_response.py lib/persist_f2fs.py test/fake-pw; do
   python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$f" || fail "$f compiles"
 done
 python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' test/fake-amixer || fail "fake-amixer compiles"
@@ -67,6 +67,18 @@ if command -v alsaucm >/dev/null && [[ -r /usr/share/alsa/ucm2/ucm.conf ]]; then
   [[ $(ucmr get PlaybackPCM/Speaker/HiFi) == *"hw:0,5" ]] || fail "UCM raven: Speaker PCM"
   [[ $(ucmr get CapturePCM/Mic/HiFi) == *"hw:0,8" ]] || fail "UCM raven: Mic PCM"
   pass "UCM profile parses: raven HiFi with Speaker and Mic"
+  # caiman: its own long-name file too
+  cp -r ucm2/Google/caiman "$u/Google/"
+  cp "ucm2/conf.d/aoc-snd-card/google,caiman-aoc-snd-card.conf" "$u/conf.virt.d/caimantest.conf"
+  sed -i -e 's/\${CardId}/0/g' -e 's/\${find-device:[^}]*playback[^}]*}/5/' \
+      -e 's/\${find-device:[^}]*capture[^}]*}/8/' "$u/Google/caiman/HiFi.conf"
+  ucmc() { ALSA_CONFIG_UCM2=$u alsaucm -c caimantest "$@" 2>&1; }
+  [[ $(ucmc list _verbs) == *"0: HiFi"* ]] || fail "UCM caiman: the HiFi verb"
+  out=$(ucmc list _devices/HiFi)
+  [[ $out == *"0: Speaker"* && $out == *"1: Mic"* ]] || fail "UCM caiman: Speaker and Mic devices"
+  [[ $(ucmc get PlaybackPCM/Speaker/HiFi) == *"hw:0,5" ]] || fail "UCM caiman: Speaker PCM"
+  [[ $(ucmc get CapturePCM/Mic/HiFi) == *"hw:0,8" ]] || fail "UCM caiman: Mic PCM"
+  pass "UCM profile parses: caiman HiFi with Speaker and Mic"
   # husky: speaker and earpiece on EP6, the microphone on EP1 capture
   cp -r ucm2/Google/husky "$u/Google/"
   cp "ucm2/conf.d/aoc-snd-card/google,husky-aoc-snd-card.conf" "$u/conf.virt.d/huskytest.conf"
@@ -125,7 +137,11 @@ raven_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/53
 [[ $raven_card == google,raven-aoc-snd-card ]] || fail "53-omamobile-raven-aoc.conf matches raven's card name"
 [[ -f "ucm2/conf.d/aoc-snd-card/$raven_card.conf" ]] || fail "raven long-name UCM file is named exactly $raven_card.conf"
 ! grep -c "raven" ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf >/dev/null || fail "cheetah's shared profile has no raven branch"
-if grep -E "cset .*(PCM Volume|PCM Source|DSP|Analog|Digital)" ucm2/Google/cheetah/HiFi.conf ucm2/Google/cheetah/VoiceCall.conf ucm2/Google/tegu/HiFi.conf ucm2/Google/raven/HiFi.conf; then
+caiman_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/56-omamobile-caiman-aoc.conf | head -1)
+[[ $caiman_card == google,caiman-aoc-snd-card ]] || fail "56-omamobile-caiman-aoc.conf matches caiman's card name"
+[[ -f "ucm2/conf.d/aoc-snd-card/$caiman_card.conf" ]] || fail "caiman long-name UCM file is named exactly $caiman_card.conf"
+! grep -c "caiman" ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf >/dev/null || fail "cheetah's shared profile has no caiman branch"
+if grep -E "cset .*(PCM Volume|PCM Source|DSP|Analog|Digital)" ucm2/Google/cheetah/HiFi.conf ucm2/Google/cheetah/VoiceCall.conf ucm2/Google/tegu/HiFi.conf ucm2/Google/raven/HiFi.conf ucm2/Google/caiman/HiFi.conf; then
   fail "UCM touches no amplifier control"
 fi
 # C9k: the Earpiece asks the protection service for the mode, both ways;
@@ -349,6 +365,64 @@ mkcal "$tmp/bad.cal" badsum; prep=(FAKE_CAL=$tmp/bad.cal); run badsum; check_ref
 mkcal "$tmp/uncal.cal" uncal; prep=(FAKE_CAL=$tmp/uncal.cal); run uncal; check_refused_early "status not 1"
 : > "$tmp/short.cal"; prep=(FAKE_CAL=$tmp/short.cal); run short; check_refused_early "short file"
 pass "refuses a missing, short or invalid calibration, muted"
+
+# F2FS persist reader: synthetic unmounted F2FS image containing /audio/speaker.cal
+mkf2fs_persist() {
+  python3 - "$1" "$2" <<'PY'
+import struct, sys
+out_path, cal_path = sys.argv[1], sys.argv[2]
+bsz = 4096
+cal_bytes = open(cal_path, "rb").read() if cal_path != "-" else None
+# Layout: blk0=SB, blk2..7=CP0 (cp=2, bps=2 => 2 blks/seg? use log_bps=9 => 512 blks/seg, tiny sparse file!)
+# Actually keep it tiny: log_bps=1 (2 blks/seg): cp_blk=2, nat_blk=6, main_blk=10
+img = bytearray(20 * bsz)
+struct.pack_into("<IHH4I", img, 1024, 0xF2F52010, 1, 16, 9, 3, 12, 1)  # bsz=4096, bps=2
+struct.pack_into("<12I", img, 1024 + 52, 2, 1, 2, 1, 5, 2, 2, 4, 6, 8, 10, 3)  # cp=2, nat=6, main=10, root=3
+# CP0 at blk 2..3 (tot=2, sit_bytes=0, nat_bytes=4 => use set 0)
+struct.pack_into("<Q", img, 2 * bsz, 7)
+struct.pack_into("<8I", img, 2 * bsz + 136, 2, 1, 3, 3, 20, 0, 4, 4092)
+struct.pack_into("<Q", img, 3 * bsz, 7)
+# NAT set 0 at blk 6: ino 3->blk 10, ino 4(audio)->blk 11, ino 5(speaker.cal)->blk 12
+for nid, ba in ((3, 10), (4, 11), (5, 12)):
+    struct.pack_into("<BII", img, 6 * bsz + nid * 9, 0, nid, ba)
+# Root inode (ino=3) at blk 10: regular dir block blk 13
+struct.pack_into("<HBB", img, 10 * bsz, 0o40755, 0, 0)
+struct.pack_into("<I", img, 10 * bsz + 360, 13)
+# Blk 13: dentry slot 0 = "audio" -> ino 4
+img[13 * bsz] = 1
+struct.pack_into("<IIHB", img, 13 * bsz + 30, 0, 4, 5, 2)
+img[13 * bsz + 30 + 214 * 11 : 13 * bsz + 30 + 214 * 11 + 5] = b"audio"
+# /audio inode (ino=4) at blk 11: inline dentry (0x04) + extra_attr (0x20, extra_isize=0)
+struct.pack_into("<HBB", img, 11 * bsz, 0o40755, 0, 0x24)
+if cal_bytes is not None:
+    area_len = 4052 - (360 + 4)
+    nr = (area_len * 8) // (19 * 8 + 1)
+    names_off = (360 + 4) + area_len - nr * 8
+    dentries_off = names_off - nr * 11
+    img[11 * bsz + 360 + 4] = 1  # slot 0
+    struct.pack_into("<IIHB", img, 11 * bsz + dentries_off, 0, 5, 11, 1)
+    img[11 * bsz + names_off : 11 * bsz + names_off + 11] = b"speaker.cal"
+    # /audio/speaker.cal inode (ino=5) at blk 12: inline data (0x02) + extra_attr (0x20)
+    struct.pack_into("<HBB", img, 12 * bsz, 0o100644, 0, 0x22)
+    struct.pack_into("<Q", img, 12 * bsz + 16, len(cal_bytes))
+    img[12 * bsz + 364 : 12 * bsz + 364 + len(cal_bytes)] = cal_bytes
+open(out_path, "wb").write(img)
+PY
+}
+mkcal "$tmp/f2fs_in.cal"
+mkf2fs_persist "$tmp/persist.f2fs" "$tmp/f2fs_in.cal"
+mktree f2fs-ok
+mkdir -p "$r/dev"
+cp "$tmp/persist.f2fs" "$r/dev/sda9"
+rc=0; sp start > "$r/out" 2>&1 || rc=$?
+((rc == 0)) && [[ $(val "Bottom DSP1 Protection cd CAL_R") == 0x00,0x00,0x21,0x00 ]] || { cat "$r/out" >&2; fail "f2fs persist calibration read"; }
+mkf2fs_persist "$tmp/persist_miss.f2fs" -
+mktree f2fs-defcal
+mkdir -p "$r/dev"
+cp "$tmp/persist_miss.f2fs" "$r/dev/sda9"
+rc=0; OMAMOBILE_SPK_DEFAULT_CAL=1 sp start > "$r/out" 2>&1 || rc=$?
+((rc == 0)) && [[ $(cat "$r/run/speaker-protection-calibration") == "default calibration" ]] || { cat "$r/out" >&2; fail "f2fs missing file falls back with OMAMOBILE_SPK_DEFAULT_CAL=1"; }
+pass "f2fs persist: factory calibration read and missing-file default fallback (read-only)"
 
 # OMAMOBILE_SPK_DEFAULT_CAL=1 (a phone with no speaker.cal, as stock's HAL):
 # no file runs on the firmware's defaults, writing no CAL_*; a short file still stops
@@ -1292,7 +1366,11 @@ for f in usr/bin/omamobile-speaker-protection usr/lib/systemd/system/omamobile-s
          usr/share/pipewire/pipewire.conf.d/60-omamobile-speaker-loudness.conf usr/bin/omamobile-speaker-eq \
          usr/lib/omamobile-audio/speaker_response.py usr/lib/systemd/user/omamobile-speaker-orient.service \
          usr/lib/systemd/system/omamobile-earpiece@.service usr/share/polkit-1/rules.d/50-omamobile-earpiece.rules \
-         usr/share/alsa/ucm2/Google/cheetah/VoiceCall.conf; do
+         usr/share/alsa/ucm2/Google/cheetah/VoiceCall.conf \
+         usr/lib/omamobile-audio/persist_f2fs.py \
+         usr/share/alsa/ucm2/conf.d/aoc-snd-card/google,caiman-aoc-snd-card.conf \
+         usr/share/alsa/ucm2/Google/caiman/HiFi.conf \
+         usr/share/wireplumber/wireplumber.conf.d/56-omamobile-caiman-aoc.conf; do
   [[ -e $tmp/root/$f ]] || fail "install stages $f"
 done
 [[ -z $(find "$tmp/root" -path '*wants*') ]] || fail "install enables nothing"

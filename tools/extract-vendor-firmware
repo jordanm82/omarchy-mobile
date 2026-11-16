@@ -267,7 +267,7 @@ case $DEVICE_OPT in
     ) ;;
   caiman)
     # Pixel 9 Pro: Wi-Fi (BCM4390 B1), Bluetooth (BCM_200.hcd), the AoC under
-    # caiman's own name, haptics, and the sensor registry.
+    # caiman's own name, haptics, CS35L41 speaker protection, and sensors.
     BOARD="google,zumapro-caiman"
     DEVICE="caiman"
     FW_BASE="brcmfmac4390b1-pcie"
@@ -285,6 +285,9 @@ case $DEVICE_OPT in
       "firmware/cs40l26-svc.bin|cs40l26-svc.bin"
       "firmware/cs40l26-dvl.bin|cs40l26-dvl.bin"
       "firmware/cs40l26-calib.wmfw|cs40l26-calib.wmfw"
+      "firmware/cs35l41-dsp1-spk-prot.wmfw|cirrus/cs35l41-dsp1-spk-prot-caiman.wmfw"
+      "firmware/cs35l41-dsp1-spk-prot.bin|cirrus/cs35l41-dsp1-spk-prot-caiman-top.bin"
+      "firmware/R-cs35l41-dsp1-spk-prot.bin|cirrus/cs35l41-dsp1-spk-prot-caiman-bottom.bin"
     ) ;;
   husky)
     # Pixel 8 Pro: Wi-Fi (BCM4398 D0) with the NVRAM for the SKU's region,
@@ -517,7 +520,7 @@ wmfw_halo() { # WMFW, Halo core (4): what cs_dsp accepts for this part
     die "$1 is not a Halo Core WMFW firmware"
 }
 # The speaker amplifiers' protection firmware, on the CS35L41 phones
-if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == raven ]]; then
+if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == raven || $DEVICE == caiman ]]; then
   wmfw_halo "cirrus/cs35l41-dsp1-spk-prot-$DEVICE.wmfw"
   grep -aq 'FIRMWARE_HALO_CSPL' "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE.wmfw" ||
     die "cs35l41-dsp1-spk-prot.wmfw is not the CS35L41 speaker protection firmware"
