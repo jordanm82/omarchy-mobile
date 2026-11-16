@@ -21,6 +21,7 @@ Before=systemd-user-sessions.service
 # mode stay cheetah's (C9_SYSTEMS, EAR_SYSTEMS in the script).
 ConditionPathExists=|/sys/bus/platform/devices/181d0000.aoc
 ConditionPathExists=|/sys/bus/platform/devices/175d0000.aoc
+ConditionPathExists=|/sys/bus/platform/devices/154b0000.aoc
 
 [Service]
 Type=oneshot

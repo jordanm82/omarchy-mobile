@@ -3,11 +3,11 @@
 pkgname=omamobile-device-caiman
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile support for the Google Pixel 9 Pro (caiman): storage guard, USB networking, hang-safe graphics and peripherals start"
+pkgdesc="Omarchy Mobile support for the Google Pixel 9 Pro (caiman): boot-slot and storage guards, USB networking, display, peripherals, AoC, and audio"
 arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
-depends=(bash systemd kmod omamobile-keyring)
+depends=(bash systemd kmod omamobile-keyring 'omamobile-audio>=0.5.19')
 optdepends=('bluez-utils: set the Bluetooth controller address from the bootloader')
 provides=(omamobile-device)
 conflicts=(omamobile-device)

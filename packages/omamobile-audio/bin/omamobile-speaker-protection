@@ -383,19 +383,31 @@ c9_source_text() {
 # Copy persist's speaker.cal to $cal and check both records. Sets the arrays
 # cal_r, cal_status, cal_checksum, cal_ambient. Logs no values.
 read_calibration() {
-  local dev w i err
+  local dev w i err f2fs_magic rc=0
   default_cal=0
   dev=$(grep -l '^PARTNAME=persist$' "$SYSBLOCK"/*/uevent 2>/dev/null | head -n1)
   [[ -n $dev ]] || { log "no persist partition"; return 1; }
   dev=${dev%/uevent}
   dev=$DEVDIR/${dev##*/}
-  command -v debugfs >/dev/null || { log "no debugfs (e2fsprogs)"; return 1; }
   mkdir -p "$RUN"
-  # debugfs opens the device read-only unless given -w; it exits 0 whatever
-  # went wrong, so its messages are kept to tell a missing file apart, in
-  # English whatever the phone's language (LC_ALL=C), since that message is
-  # matched below
-  err=$( (umask 077 && LC_ALL=C debugfs -R "cat $CAL_PATH" "$dev" 2>&1 > "$cal") )
+  f2fs_magic=$(od -An -tx4 -j 1024 -N4 "$dev" 2>/dev/null | tr -d ' \n')
+  if [[ $f2fs_magic == f2f52010 && -r $LIB/persist_f2fs.py ]]; then
+    err=$( (umask 077 && python3 "$LIB/persist_f2fs.py" "$dev" "$CAL_PATH" > "$cal") 2>&1 ) || rc=$?
+    if ((rc == 2)) && [[ ${OMAMOBILE_SPK_DEFAULT_CAL:-0} == 1 && ! -s $cal ]]; then
+      log "persist:$CAL_PATH is missing or short"
+      log "OMAMOBILE_SPK_DEFAULT_CAL=1: using the protection firmware's default calibration, as stock without speaker.cal"
+      default_cal=1
+      return 0
+    fi
+    ((rc == 0)) || { log "persist:$CAL_PATH read failed: $err"; return 1; }
+  else
+    command -v debugfs >/dev/null || { log "no debugfs (e2fsprogs)"; return 1; }
+    # debugfs opens the device read-only unless given -w; it exits 0 whatever
+    # went wrong, so its messages are kept to tell a missing file apart, in
+    # English whatever the phone's language (LC_ALL=C), since that message is
+    # matched below
+    err=$( (umask 077 && LC_ALL=C debugfs -R "cat $CAL_PATH" "$dev" 2>&1 > "$cal") )
+  fi
   if (($(stat -c %s "$cal" 2>/dev/null || echo 0) < ${#AMPS[@]} * CAL_WORDS * 4)); then
     log "persist:$CAL_PATH is missing or short"
     # only debugfs's own "File not found": an empty file, or an empty read
