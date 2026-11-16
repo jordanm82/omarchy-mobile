@@ -1,0 +1,67 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Unload brcmfmac across s2idle suspend on Pixel 9 Pro (caiman) and reload it
+# on resume. BCM4390B1 hangs s2idle entry if left loaded across sleep while
+# NetworkManager / wpa_supplicant tear down or scan right before freeze.
+set -u
+
+ROOT=${OMAMOBILE_CAIMAN_ROOT:-}
+STATE_DIR="$ROOT/run/omamobile"
+STATE_FILE="$STATE_DIR/wifi-unloaded-for-sleep"
+LOG_DIR="$ROOT/var/log/omamobile"
+LOG_FILE="$LOG_DIR/wifi-sleep.log"
+
+[ -e "$ROOT/etc/omamobile/wifi-keep-across-sleep" ] && exit 0
+
+log() {
+	mkdir -p "$LOG_DIR" 2>/dev/null || true
+	printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || echo now)" "$*" >>"$LOG_FILE" 2>/dev/null || true
+}
+
+case "${1:-}" in
+pre)
+	[ -r "$ROOT/proc/modules" ] || exit 0
+	grep -q '^brcmfmac ' "$ROOT/proc/modules" || exit 0
+
+	mkdir -p "$STATE_DIR" 2>/dev/null || exit 0
+	stopped_iwd=0
+	if systemctl is-active --quiet iwd.service 2>/dev/null; then
+		if systemctl stop iwd.service 2>/dev/null; then
+			stopped_iwd=1
+		else
+			log "pre: failed to stop iwd.service"
+		fi
+	fi
+	if systemctl is-active --quiet wpa_supplicant.service 2>/dev/null; then
+		systemctl stop wpa_supplicant.service 2>/dev/null || log "pre: failed to stop wpa_supplicant.service"
+	fi
+
+	rmmod_out=""
+	if rmmod_out=$(timeout 20 rmmod brcmfmac_wcc brcmfmac 2>&1); then
+		printf 'stopped_iwd=%s\n' "$stopped_iwd" >"$STATE_FILE"
+		log "pre (${2:-unknown}): unloaded brcmfmac_wcc brcmfmac (stopped_iwd=$stopped_iwd)"
+	else
+		log "pre (${2:-unknown}): rmmod brcmfmac_wcc brcmfmac failed: $rmmod_out"
+		[ "$stopped_iwd" -eq 1 ] && systemctl start iwd.service 2>/dev/null || true
+	fi
+	;;
+post)
+	[ -f "$STATE_FILE" ] || exit 0
+	stopped_iwd=0
+	# shellcheck disable=SC1090
+	. "$STATE_FILE" 2>/dev/null || true
+	rm -f "$STATE_FILE"
+
+	if modprobe_out=$(modprobe brcmfmac 2>&1); then
+		log "post (${2:-unknown}): reloaded brcmfmac"
+	else
+		log "post (${2:-unknown}): modprobe brcmfmac failed: $modprobe_out"
+	fi
+
+	if [ "${stopped_iwd:-0}" -eq 1 ]; then
+		systemctl start iwd.service 2>/dev/null || log "post: failed to start iwd.service"
+	fi
+	;;
+esac
+
+exit 0
