@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Start the Pixel 9 Pro AoC (audio and sensor DSP) hang-safely at boot when
+# the DT exposes 154b0000.aoc. Also aliased as omamobile-aoc.service for
+# omamobile-sensor-proxy.
+[Unit]
+Description=Boot the Pixel 9 Pro AoC audio and sensor DSP (hang-safe)
+After=local-fs.target systemd-modules-load.service
+ConditionPathExists=/sys/bus/platform/devices/154b0000.aoc
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-caiman-aoc-start
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
