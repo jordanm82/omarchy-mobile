@@ -41,6 +41,13 @@ fastboot getvar <name>                 # named variables only; never fastboot ge
 fastboot flashing get_unlock_ability
 ```
 
+## 2026-11-16: Stage 9 — `s2idle` Suspend, RTC / Power-Key Wake, and Sleep Hooks
+
+Verified `s2idle` suspend (`SuspendState=freeze`, `MemorySleepMode=s2idle`) on `7.3.0-rc6-omamobile-push1-g646a1459925d` (`zumapro.dtsi` already carries `8aaf93ea1` UFS `"default"`/`"sleep"` pin states) with `omamobile-device-caiman` `0.8.0` ([BRINGUP-M9.md](BRINGUP-M9.md)):
+
+- **`BCM4390B1` sleep hook isolation (`omamobile-caiman-wifi`)** `[V]` (`R/`, `pm_test` + `rtcwake`): plain `systemctl suspend` initially wedged on `s2idle` entry while `brcmfmac` was loaded (`Scan abort failed` / `event handler failed (69)`); `pm_test=devices` and `pm_test=platform` passed, and unloading `brcmfmac_wcc brcmfmac` unblocked `rtcwake -m freeze -s 8` (`43 ms` entry, `8.8 s` wake on `IRQ 52`). `omamobile-device-caiman` `0.8.0` adds `SuspendState=freeze` plus `omamobile-caiman-{wifi,nfc,cpuidle}` hooks (stopping `wpa_supplicant`/`iwd` + unloading/reloading `brcmfmac`).
+- **Attended RTC, 3-cycle sequential, cold Boot #2, and Power-key wake** `[V]` (`R/`, `alarm-wake-test` + `phone-smoke` + `journalctl`): passed `tools/alarm-wake-test` (`SECS=30 SUSPEND=1`, `IRQ 52` `s2mpg14-pmic` `ok - on time`), `3` back-to-back sequential `systemctl suspend` cycles (`suspend_stats/success` `6 -> 9`), cold Boot #2 `alarm-wake-test` + `phone-smoke` (`0` failed units, `googlecaimanaoc`, `wlp1s0`, `hci0`, display/touch/sensors all active after resume), and attended physical **Power** button wake (`IRQ 56`, `gpa4 0 Edge Power`, `omamobile-sleepd` lit lock screen, `suspend_stats success fail: 2 0`).
+
 ## 2026-11-16: Stage 8 — Dual `CS35L41B` Speakers, Built-in Microphones, UCM2, and PipeWire
 
 Built `7.3.0-rc6-omamobile-push1-g646a1459925d` (`65bbd5123`..`646a14599` on `omamobile-zumapro-caiman-audio`, adding `CMU_HSI0` `USI1` clocks, `usi1_hsi0`/`spi19`, a `manual_native_cs` GPIO-CS native-nSS guard in `spi-s3c64xx.c`, and `&spi19` dual `cs35l41` nodes capped at `2.5 A` boost peak with `cirrus,dsp-no-hibernate`, plus `DTB_OVERLAYS="aoc-sound"` in `device/caiman/overlays/aoc-sound.dtso`), extended `tools/extract-vendor-firmware -d caiman` with the Cirrus protection blobs, updated `omamobile-audio` (`0.5.19`, adding read-only F2FS `persist` support in `lib/persist_f2fs.py`, `154b0000.aoc` condition, `caiman` UCM2 + WirePlumber rule) and `omamobile-device-caiman` (`0.7.0`), and verified across two boots on Slot B ([BRINGUP-M8.md](BRINGUP-M8.md)):

@@ -1,0 +1,40 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Disable deep cpuidle states (state1+) across s2idle suspend on caiman if a
+# kernel advertises any, restoring them on resume. No-op when only WFI exists.
+set -u
+
+ROOT=${OMAMOBILE_CAIMAN_ROOT:-}
+STATE_DIR="$ROOT/run/omamobile"
+STATE_FILE="$STATE_DIR/cpuidle-disabled-for-sleep"
+
+[ -e "$ROOT/etc/omamobile/cpuidle-keep-across-sleep" ] && exit 0
+
+case "${1:-}" in
+pre)
+	mkdir -p "$STATE_DIR" 2>/dev/null || exit 0
+	: >"$STATE_FILE.tmp"
+	for f in "$ROOT"/sys/devices/system/cpu/cpu*/cpuidle/state[1-9]*/disable; do
+		[ -w "$f" ] || continue
+		if [ "$(cat "$f" 2>/dev/null)" = "0" ]; then
+			if printf '1\n' >"$f" 2>/dev/null; then
+				printf '%s\n' "$f" >>"$STATE_FILE.tmp"
+			fi
+		fi
+	done
+	if [ -s "$STATE_FILE.tmp" ]; then
+		mv -f "$STATE_FILE.tmp" "$STATE_FILE"
+	else
+		rm -f "$STATE_FILE.tmp"
+	fi
+	;;
+post)
+	[ -f "$STATE_FILE" ] || exit 0
+	while IFS= read -r f; do
+		[ -w "$f" ] && printf '0\n' >"$f" 2>/dev/null || true
+	done <"$STATE_FILE"
+	rm -f "$STATE_FILE"
+	;;
+esac
+
+exit 0

@@ -42,9 +42,9 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
     || fail "the pacman install script drifted from the cheetah package"
   pass "the pacman install script matches the cheetah package"
   sleep=vendor/systemd/sleep.conf.d/10-omamobile.conf
-  [[ $(grep -v '^#' "$sleep") == "$(grep -v '^#' "../omamobile-device-cheetah/$sleep")" ]] \
-    || fail "the sleep drop-in's settings drifted from the cheetah package"
-  pass "the sleep drop-in's settings match the cheetah package"
+  [[ $(grep -v '^#' "$sleep") == $'[Sleep]\nSuspendState=freeze\nMemorySleepMode=s2idle\nAllowHibernation=no\nAllowHybridSleep=no\nAllowSuspendThenHibernate=no' ]] \
+    || fail "the sleep drop-in must select SuspendState=freeze and s2idle"
+  pass "the sleep drop-in selects SuspendState=freeze and s2idle"
 fi
 if [[ -f ../omamobile-device-husky/vendor/systemd/network/20-usb-gadget.network ]]; then
   cmp -s vendor/systemd/network/20-usb-gadget.network \
@@ -91,6 +91,9 @@ for f in usr/bin/reboot-to \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
+         usr/lib/systemd/system-sleep/omamobile-caiman-cpuidle \
+         usr/lib/systemd/system-sleep/omamobile-caiman-nfc \
+         usr/lib/systemd/system-sleep/omamobile-caiman-wifi \
          usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-caiman.conf \
          usr/lib/systemd/system/display-manager.service.d/10-omamobile-caiman.conf \
          usr/lib/systemd/system/omamobile-bt-addr@.service \
@@ -122,8 +125,12 @@ done
   || fail "omamobile-speaker-protection.service is enabled by a vendor wants link"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/omamobile-aoc.service") == omamobile-caiman-aoc.service ]] \
   || fail "omamobile-aoc.service must alias omamobile-caiman-aoc.service"
-[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 32 ]] \
-  || fail "install stages expected 32 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
+for hook in omamobile-caiman-cpuidle omamobile-caiman-nfc omamobile-caiman-wifi; do
+  [[ -x $tmp/root/usr/lib/systemd/system-sleep/$hook ]] \
+    || fail "$hook sleep hook must be executable"
+done
+[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 35 ]] \
+  || fail "install stages expected 35 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
 grep -qx 'ConditionPathExists=!/usr/share/omamobile/device-caiman/version' \
   "$tmp/root/usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-caiman.conf" \
   || fail "module cleanup guard missing"
@@ -347,6 +354,78 @@ out=$(PATH="$fbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$fake" "$tmp/root/usr/bin/omamob
 mv "$tmp/gpu" "$fake/sys/bus/platform/devices/1f000000.gpu"
 mv "$tmp/decon" "$fake/sys/bus/platform/devices/19470000.display-controller"
 pass "hang-safe graphics start honors marker, --retry, allow_tx, gs_decon, peripherals, and card discovery"
+
+# 7. Sleep hooks (wifi, nfc, cpuidle) honor OMAMOBILE_CAIMAN_ROOT and keep-across-sleep flags.
+sroot="$tmp/sleep-root"
+sbin="$tmp/sleep-bin"
+slog="$tmp/sleep.log"
+mkdir -p "$sroot/proc" "$sroot/run/omamobile" "$sroot/etc/omamobile" "$sroot/var/log/omamobile" \
+         "$sroot/sys/devices/system/cpu/cpu0/cpuidle/state0" \
+         "$sroot/sys/devices/system/cpu/cpu0/cpuidle/state1" \
+         "$sbin"
+cat > "$sbin/systemctl" <<EOF
+#!/bin/bash
+if [[ \$1 == is-active && \$2 == --quiet ]]; then
+  grep -qx "\$3" "$sroot/active-services" 2>/dev/null
+  exit \$?
+fi
+echo "systemctl \$*" >> "$slog"
+EOF
+cat > "$sbin/rmmod" <<EOF
+#!/bin/bash
+echo "rmmod \$*" >> "$slog"
+EOF
+cat > "$sbin/modprobe" <<EOF
+#!/bin/bash
+echo "modprobe \$*" >> "$slog"
+EOF
+cat > "$sbin/timeout" <<'EOF'
+#!/bin/bash
+shift
+exec "$@"
+EOF
+chmod +x "$sbin/"*
+
+echo "brcmfmac 12345 0 - Live 0x0" > "$sroot/proc/modules"
+printf 'wpa_supplicant.service\n' > "$sroot/active-services"
+: > "$slog"
+PATH="$sbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$sroot" "$tmp/root/usr/lib/systemd/system-sleep/omamobile-caiman-wifi" pre suspend
+[[ -f $sroot/run/omamobile/wifi-unloaded-for-sleep ]] || fail "wifi pre must record unload state"
+grep -qx 'systemctl stop wpa_supplicant.service' "$slog" || fail "wifi pre must stop wpa_supplicant"
+grep -qx 'rmmod brcmfmac_wcc brcmfmac' "$slog" || fail "wifi pre must unload brcmfmac_wcc and brcmfmac"
+PATH="$sbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$sroot" "$tmp/root/usr/lib/systemd/system-sleep/omamobile-caiman-wifi" post suspend
+[[ ! -e $sroot/run/omamobile/wifi-unloaded-for-sleep ]] || fail "wifi post must clear unload state"
+grep -qx 'modprobe brcmfmac' "$slog" || fail "wifi post must reload brcmfmac"
+
+: > "$slog"
+printf 'iwd.service\n' > "$sroot/active-services"
+PATH="$sbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$sroot" "$tmp/root/usr/lib/systemd/system-sleep/omamobile-caiman-wifi" pre suspend
+PATH="$sbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$sroot" "$tmp/root/usr/lib/systemd/system-sleep/omamobile-caiman-wifi" post suspend
+grep -qx 'systemctl stop iwd.service' "$slog" || fail "wifi pre must stop iwd if active"
+grep -qx 'systemctl start iwd.service' "$slog" || fail "wifi post must restart iwd if it stopped it"
+
+: > "$slog"
+: > "$sroot/etc/omamobile/wifi-keep-across-sleep"
+PATH="$sbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$sroot" "$tmp/root/usr/lib/systemd/system-sleep/omamobile-caiman-wifi" pre suspend
+[[ ! -s $slog ]] || fail "wifi-keep-across-sleep must skip unload"
+
+: > "$slog"
+printf 'neard.service\n' > "$sroot/active-services"
+PATH="$sbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$sroot" "$tmp/root/usr/lib/systemd/system-sleep/omamobile-caiman-nfc" pre suspend
+[[ -f $sroot/run/omamobile/nfc-stopped-for-sleep ]] || fail "nfc pre must record stopped state"
+grep -qx 'systemctl stop neard.service' "$slog" || fail "nfc pre must stop neard"
+PATH="$sbin:$PATH" OMAMOBILE_CAIMAN_ROOT="$sroot" "$tmp/root/usr/lib/systemd/system-sleep/omamobile-caiman-nfc" post suspend
+[[ ! -e $sroot/run/omamobile/nfc-stopped-for-sleep ]] || fail "nfc post must clear stopped state"
+grep -qx 'systemctl start neard.service' "$slog" || fail "nfc post must restart neard"
+
+echo 0 > "$sroot/sys/devices/system/cpu/cpu0/cpuidle/state0/disable"
+echo 0 > "$sroot/sys/devices/system/cpu/cpu0/cpuidle/state1/disable"
+OMAMOBILE_CAIMAN_ROOT="$sroot" "$tmp/root/usr/lib/systemd/system-sleep/omamobile-caiman-cpuidle" pre suspend
+[[ $(cat "$sroot/sys/devices/system/cpu/cpu0/cpuidle/state0/disable") == 0 ]] || fail "cpuidle pre must preserve state0 (WFI)"
+[[ $(cat "$sroot/sys/devices/system/cpu/cpu0/cpuidle/state1/disable") == 1 ]] || fail "cpuidle pre must disable state1"
+OMAMOBILE_CAIMAN_ROOT="$sroot" "$tmp/root/usr/lib/systemd/system-sleep/omamobile-caiman-cpuidle" post suspend
+[[ $(cat "$sroot/sys/devices/system/cpu/cpu0/cpuidle/state1/disable") == 0 ]] || fail "cpuidle post must re-enable state1"
+pass "sleep hooks handle Wi-Fi, NFC, and cpuidle pre/post cleanly"
 
 ./test/aoc-start
 ./test/charge-limit

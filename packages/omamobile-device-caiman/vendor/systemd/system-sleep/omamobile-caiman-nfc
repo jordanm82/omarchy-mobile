@@ -1,0 +1,43 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Pause neard across s2idle suspend if active so NFC polling does not wake or
+# stall sleep entry on caiman.
+set -u
+
+ROOT=${OMAMOBILE_CAIMAN_ROOT:-}
+STATE_DIR="$ROOT/run/omamobile"
+STATE_FILE="$STATE_DIR/nfc-stopped-for-sleep"
+LOG_DIR="$ROOT/var/log/omamobile"
+LOG_FILE="$LOG_DIR/nfc-sleep.log"
+
+[ -e "$ROOT/etc/omamobile/nfc-keep-across-sleep" ] && exit 0
+
+log() {
+	mkdir -p "$LOG_DIR" 2>/dev/null || true
+	printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || echo now)" "$*" >>"$LOG_FILE" 2>/dev/null || true
+}
+
+case "${1:-}" in
+pre)
+	if systemctl is-active --quiet neard.service 2>/dev/null; then
+		mkdir -p "$STATE_DIR" 2>/dev/null || exit 0
+		if systemctl stop neard.service 2>/dev/null; then
+			: >"$STATE_FILE"
+			log "pre (${2:-unknown}): stopped neard.service"
+		else
+			log "pre (${2:-unknown}): failed to stop neard.service"
+		fi
+	fi
+	;;
+post)
+	[ -f "$STATE_FILE" ] || exit 0
+	rm -f "$STATE_FILE"
+	if systemctl start neard.service 2>/dev/null; then
+		log "post (${2:-unknown}): started neard.service"
+	else
+		log "post (${2:-unknown}): failed to start neard.service"
+	fi
+	;;
+esac
+
+exit 0
