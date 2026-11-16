@@ -266,8 +266,8 @@ case $DEVICE_OPT in
       "firmware/cs40l26-calib.wmfw|cs40l26-calib.wmfw"
     ) ;;
   caiman)
-    # Pixel 9 Pro: Wi-Fi (BCM4390 B1), Bluetooth (BCM_200.hcd), haptics, and
-    # the sensor registry.
+    # Pixel 9 Pro: Wi-Fi (BCM4390 B1), Bluetooth (BCM_200.hcd), the AoC under
+    # caiman's own name, haptics, and the sensor registry.
     BOARD="google,zumapro-caiman"
     DEVICE="caiman"
     FW_BASE="brcmfmac4390b1-pcie"
@@ -279,6 +279,7 @@ case $DEVICE_OPT in
       "firmware/bcmdhd_clm.blob_4390_b1|brcm/$FW_BASE.$BOARD.clm_blob"
       "firmware/bcmdhd_txcap.blob_4390_b1|brcm/$FW_BASE.$BOARD.txcap_blob"
       "firmware/brcm/BCM_200.hcd|brcm/BCM.$BOARD.hcd"
+      "firmware/aoc.bin|aoc-caiman.bin"
       "firmware/cs40l26.wmfw|cs40l26.wmfw"
       "firmware/cs40l26.bin|cs40l26.bin"
       "firmware/cs40l26-svc.bin|cs40l26-svc.bin"
@@ -582,8 +583,8 @@ fi
   say "Haptics firmware: cs40l26.wmfw ($(stat -c %s "$dest/cs40l26.wmfw") bytes) and its wavetable"
 [[ $DEVICE == panther ]] &&
   say "Video codec firmware: s5p-mfc-v15.fw (version 0x$mfc_ver)"
-[[ $DEVICE == tegu ]] &&
-  say "AoC firmware: aoc-tegu.bin ($(stat -c %s "$dest/aoc-tegu.bin") bytes)"
+[[ $DEVICE == tegu || $DEVICE == caiman ]] &&
+  say "AoC firmware: aoc-$DEVICE.bin ($(stat -c %s "$dest/aoc-$DEVICE.bin") bytes)"
 [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == raven ]] &&
   say "Speaker protection: cs35l41-dsp1-spk-prot-$DEVICE.wmfw and the top and bottom tunings"
 # Publish: move the previous outputs aside, then the new ones into place, all

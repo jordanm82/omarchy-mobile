@@ -4,12 +4,15 @@ Omarchy Mobile's userspace package for the Google Pixel 9 Pro (`caiman`, Tensor 
 
 | Path | Installs to | What it does |
 | --- | --- | --- |
+| `bin/omamobile-caiman-aoc-start` | `/usr/bin` | Hang-safe AoC loader (Trusty, GSA, AoC mailboxes/core/channels, `aoc-caiman.bin` firmware load, USF settle marker) |
 | `bin/omamobile-caiman-graphics-start` | `/usr/bin` | Hang-safe loader for GPU (`panthor`), display (`gs_decon` + `allow_tx=1` for `google-cm4`), haptics (`cs40l26_vibra`), torch (`leds_lm3644`), battery gauge (`max77779_battery`), Wi-Fi (`phy_zuma_pcie` + `pcie_gs201` + `brcmfmac`), Bluetooth (`hci_uart`, ordered after `brcmfmac`), and NFC (`nxp_nci_i2c`) |
 | `bin/omamobile-bt-addr` | `/usr/bin` | Programs the Bluetooth controller MAC from `/proc/device-tree/chosen/config/bt_addr` via `btmgmt` |
 | `bin/omamobile-caiman-charge-limit` | `/usr/bin` | Applies `/etc/omamobile/charge-limit` (1–100%) to `max77779-charger` via `charge_control_end_threshold` or `charge_behaviour` hysteresis |
+| `vendor/modprobe.d/omamobile-caiman-aoc.conf` | `/usr/lib/modprobe.d` | Blacklists Trusty, GSA, AoC, and CS35L41 autoload so only `omamobile-caiman-aoc-start` loads them in order |
 | `vendor/modprobe.d/omamobile-caiman-guards.conf` | `/usr/lib/modprobe.d` | Blacklists `panthor`, `gs_decon`, `cs40l26_vibra`, `leds_lm3644`, `max77779_battery`, `phy_zuma_pcie`, `pcie_gs201`, `brcmfmac`, `hci_uart`, and `nxp_nci_i2c` autoload so only the hang-safe start loads them |
 | `vendor/modprobe.d/omamobile-caiman-clk-acpm.conf` | `/usr/lib/modprobe.d` | Sets `clk_acpm.zumapro_gpu_max_khz=890000` for GPU ACPM DVFS up to `890 MHz` |
 | `vendor/modprobe.d/omamobile-caiman-display.conf` | `/usr/lib/modprobe.d` | Configures `gs_decon` `max_refresh=120 screen_off=2` for 120 Hz refresh and panel sleep on DPMS off |
+| `vendor/systemd/system/omamobile-caiman-aoc.service` | `/usr/lib/systemd/system` | Oneshot unit enabled via `multi-user.target.wants` (aliased as `omamobile-aoc.service`) when `154b0000.aoc` exists |
 | `vendor/systemd/system/omamobile-caiman-graphics.service` | `/usr/lib/systemd/system` | Oneshot unit enabled via `multi-user.target.wants`, ordered before `display-manager.service` |
 | `vendor/systemd/system/omamobile-bt-addr@.service` | `/usr/lib/systemd/system` | Oneshot unit started by udev to apply `/chosen/config/bt_addr` when an `hciN` adapter appears |
 | `vendor/systemd/system/display-manager.service.d/10-omamobile-caiman.conf` | `/usr/lib/systemd/system/display-manager.service.d` | Orders SDDM after `omamobile-caiman-graphics.service` |

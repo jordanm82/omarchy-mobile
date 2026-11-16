@@ -75,8 +75,10 @@ pass "reboot-to compiles"
 ./install "$tmp/root" "$tmp/build"
 for f in usr/bin/reboot-to \
          usr/bin/omamobile-bt-addr \
+         usr/bin/omamobile-caiman-aoc-start \
          usr/bin/omamobile-caiman-charge-limit \
          usr/bin/omamobile-caiman-graphics-start \
+         usr/lib/modprobe.d/omamobile-caiman-aoc.conf \
          usr/lib/modprobe.d/omamobile-caiman-clk-acpm.conf \
          usr/lib/modprobe.d/omamobile-caiman-display.conf \
          usr/lib/modprobe.d/omamobile-caiman-guards.conf \
@@ -92,6 +94,7 @@ for f in usr/bin/reboot-to \
          usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-caiman.conf \
          usr/lib/systemd/system/display-manager.service.d/10-omamobile-caiman.conf \
          usr/lib/systemd/system/omamobile-bt-addr@.service \
+         usr/lib/systemd/system/omamobile-caiman-aoc.service \
          usr/lib/systemd/system/omamobile-caiman-graphics.service \
          usr/share/uwsm/env.d/omamobile-caiman-graphics \
          usr/share/omamobile/device.conf \
@@ -101,23 +104,34 @@ for f in usr/bin/reboot-to \
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
 for b in usr/bin/reboot-to usr/bin/omamobile-bt-addr \
+         usr/bin/omamobile-caiman-aoc-start \
          usr/bin/omamobile-caiman-charge-limit usr/bin/omamobile-caiman-graphics-start; do
   [[ -x $tmp/root/$b ]] || fail "$b must be installed executable"
 done
 [[ ! -x $tmp/root/usr/lib/modprobe.d/omamobile-caiman-guards.conf \
+   && ! -x $tmp/root/usr/lib/modprobe.d/omamobile-caiman-aoc.conf \
+   && ! -x $tmp/root/usr/lib/systemd/system/omamobile-caiman-aoc.service \
    && ! -x $tmp/root/usr/lib/systemd/system/omamobile-caiman-graphics.service \
    && ! -x $tmp/root/usr/lib/udev/rules.d/75-omamobile-caiman-charger.rules ]] \
   || fail "non-script vendor files must not be executable"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-caiman-graphics.service") == ../omamobile-caiman-graphics.service ]] \
   || fail "omamobile-caiman-graphics.service is enabled by a vendor wants link"
-[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 26 ]] \
-  || fail "install stages expected 26 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-caiman-aoc.service") == ../omamobile-caiman-aoc.service ]] \
+  || fail "omamobile-caiman-aoc.service is enabled by a vendor wants link"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/omamobile-aoc.service") == omamobile-caiman-aoc.service ]] \
+  || fail "omamobile-aoc.service must alias omamobile-caiman-aoc.service"
+[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 31 ]] \
+  || fail "install stages expected 31 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
 grep -qx 'ConditionPathExists=!/usr/share/omamobile/device-caiman/version' \
   "$tmp/root/usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-caiman.conf" \
   || fail "module cleanup guard missing"
 for mod in panthor gs_decon cs40l26_vibra leds_lm3644 max77779_battery phy_zuma_pcie pcie_gs201 brcmfmac hci_uart nxp_nci_i2c; do
   grep -qx "blacklist $mod" "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-guards.conf" \
     || fail "$mod must be blacklisted for autoload"
+done
+for mod in trusty_core trusty_log trusty_ipc trusty_virtio gsa gs201_aoc_sysmmu mailbox_wc aoc_core aoc_channel_dev aoc_char_dev aoc_alsa_dev aoc_alsa_dev_util snd_soc_cs35l41_spi; do
+  grep -qx "blacklist $mod" "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-aoc.conf" \
+    || fail "$mod must be blacklisted in omamobile-caiman-aoc.conf"
 done
 grep -qx 'options gs_decon max_refresh=120 screen_off=2' \
   "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-display.conf" \
@@ -332,6 +346,7 @@ mv "$tmp/gpu" "$fake/sys/bus/platform/devices/1f000000.gpu"
 mv "$tmp/decon" "$fake/sys/bus/platform/devices/19470000.display-controller"
 pass "hang-safe graphics start honors marker, --retry, allow_tx, gs_decon, peripherals, and card discovery"
 
+./test/aoc-start
 ./test/charge-limit
 
 net=vendor/systemd/network/20-usb-gadget.network
