@@ -84,6 +84,7 @@ for f in usr/bin/reboot-to \
          usr/lib/modprobe.d/omamobile-caiman-guards.conf \
          usr/lib/udev/rules.d/10-omamobile-storage.rules \
          usr/lib/udev/rules.d/20-omamobile-torch.rules \
+         usr/lib/udev/rules.d/70-omamobile-dma-heap.rules \
          usr/lib/udev/rules.d/72-omamobile-feedbackd.rules \
          usr/lib/udev/rules.d/75-omamobile-caiman-charger.rules \
          usr/lib/udev/rules.d/80-omamobile-bt-addr.rules \
@@ -100,6 +101,7 @@ for f in usr/bin/reboot-to \
          usr/lib/systemd/system/omamobile-caiman-aoc.service \
          usr/lib/systemd/system/omamobile-caiman-graphics.service \
          usr/share/uwsm/env.d/omamobile-caiman-graphics \
+         usr/share/wireplumber/wireplumber.conf.d/50-omamobile-cameras.conf \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-caiman/version \
          usr/share/licenses/omamobile-device-caiman/LICENSE \
@@ -129,8 +131,8 @@ for hook in omamobile-caiman-cpuidle omamobile-caiman-nfc omamobile-caiman-wifi;
   [[ -x $tmp/root/usr/lib/systemd/system-sleep/$hook ]] \
     || fail "$hook sleep hook must be executable"
 done
-[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 35 ]] \
-  || fail "install stages expected 35 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
+[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 37 ]] \
+  || fail "install stages expected 37 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
 grep -qx 'ConditionPathExists=!/usr/share/omamobile/device-caiman/version' \
   "$tmp/root/usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-caiman.conf" \
   || fail "module cleanup guard missing"

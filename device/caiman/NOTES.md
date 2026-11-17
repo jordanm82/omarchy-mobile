@@ -41,6 +41,13 @@ fastboot getvar <name>                 # named variables only; never fastboot ge
 fastboot flashing get_unlock_ability
 ```
 
+## 2026-11-17: Stage 10 — Cameras (`s5kgnk`, 3x `imx858`, `gs201-csis` LoCH, and `libcamera`)
+
+Verified all four cameras (`s5kgnk` Main `4080x3072`, `imx858` Ultrawide `4032x3024`, `imx858` Telephoto `4032x3024`, `imx858` Front `3840x2736`) on Slot B (`7.3.0-rc6-omamobile-push1-g6d2575ca807f-dirty`, committed on `omamobile-zumapro-caiman-camera` as `32264e98e` with `d72154406` and `6d2575ca8`) with `libcamera 0.7.2-4.24` (`0058-...patch`) and `omamobile-device-caiman 0.9.0-1` (`70-omamobile-dma-heap.rules` + `50-omamobile-cameras.conf`) ([BRINGUP-M10.md](BRINGUP-M10.md)):
+
+- **`gs201-csis` `zumapro` LoCH WDMA & DT fixes** `[V]` (`K/`, `R/`): added `google,lrte-packet-delimiters;` in `zumapro-caiman.dts` `&csis0`, defaulted `pixel_mode = -1` to `OCTA` (`3`) when `csis->soc->has_loch`, allocated per-instance `SZ_64K` coherent `sq_cpu`/`sq_dma` programmed into `ZUMAPRO_LOCH_SQ_CFG_{ID,STRIDE,ADDR_LSB,ADDR_MSB}`, and gated `ZUMAPRO_LOCH_WDMA_CTX_EN` in `zumapro_loch_irq` / `zumapro_loch_set_addr` to eliminate `CFG_MISS` (`0x10`) starvation freezes while removing temporary debug module params.
+- **Two-boot verification (`cam`, `gst-launch-1.0`, `wpctl`, `phone-smoke`)** `[V]` (`R/`): unprivileged `gst-launch-1.0 libcamerasrc` (Mali-G715 Panfrost SoftISP) and `cam -c 1..4 -C4` passed across Boot #1 and cold Boot #2 (`Main 30.00 fps`, `UW 29.70 fps`, `Tele 29.54 fps`, `Front 29.70 fps`; `WDMA ... errors 0, missed frame ends 0`), `wpctl status` exposed all four named `[libcamera]` sources without raw CSIS nodes, and `tools/phone-smoke` reported `cameras | ok (4 listed by libcamera)`.
+
 ## 2026-11-16: Stage 9 — `s2idle` Suspend, RTC / Power-Key Wake, and Sleep Hooks
 
 Verified `s2idle` suspend (`SuspendState=freeze`, `MemorySleepMode=s2idle`) on `7.3.0-rc6-omamobile-push1-g646a1459925d` (`zumapro.dtsi` already carries `8aaf93ea1` UFS `"default"`/`"sleep"` pin states) with `omamobile-device-caiman` `0.8.0` ([BRINGUP-M9.md](BRINGUP-M9.md)):

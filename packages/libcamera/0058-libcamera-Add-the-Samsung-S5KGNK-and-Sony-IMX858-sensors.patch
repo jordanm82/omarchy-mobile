@@ -1,0 +1,166 @@
+From dd3b55ddf057321372c5a37292e50a5542a3c7fc Mon Sep 17 00:00:00 2001
+From: Jordan Mauriello <jordan.c.mauriello@gmail.com>
+Date: Tue, 17 Nov 2026 16:31:43 -0600
+Subject: [PATCH] libcamera: Add the Samsung S5KGNK and Sony IMX858 sensors
+
+Add sensor helpers, static properties, and uncalibrated simple-IPA tuning
+files for the Pixel 9 Pro (caiman) Samsung S5KGNK main camera and Sony
+IMX858 ultrawide, telephoto, and front cameras.
+---
+ src/ipa/libipa/camera_sensor_helper.cpp       | 24 +++++++++++++++++++
+ src/ipa/simple/data/imx858.yaml               | 18 ++++++++++++++
+ src/ipa/simple/data/meson.build               |  2 ++
+ src/ipa/simple/data/s5kgnk.yaml               | 18 ++++++++++++++
+ .../sensor/camera_sensor_properties.cpp       | 20 ++++++++++++++++
+ 5 files changed, 82 insertions(+)
+ create mode 100644 src/ipa/simple/data/imx858.yaml
+ create mode 100644 src/ipa/simple/data/s5kgnk.yaml
+
+diff --git a/src/ipa/libipa/camera_sensor_helper.cpp b/src/ipa/libipa/camera_sensor_helper.cpp
+index aab98a1..142f4c2 100644
+--- a/src/ipa/libipa/camera_sensor_helper.cpp
++++ b/src/ipa/libipa/camera_sensor_helper.cpp
+@@ -682,6 +682,18 @@ public:
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("imx708", CameraSensorHelperImx708)
+ 
++class CameraSensorHelperImx858 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperImx858()
++	{
++		blackLevel_ = 4096;
++		/* 0 to 480 for 1x to 16x, matching the IMX386/IMX258 linear formula. */
++		gain_ = AnalogueGainLinear{ 0, 512, -1, 512 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("imx858", CameraSensorHelperImx858)
++
+ class CameraSensorHelperOv01a10 : public CameraSensorHelper
+ {
+ public:
+@@ -896,6 +908,18 @@ public:
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("s5kgn8", CameraSensorHelperS5kgn8)
+ 
++class CameraSensorHelperS5kgnk : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperS5kgnk()
++	{
++		blackLevel_ = 4096;
++		/* Code / 32, matching the Samsung S5KGN1/S5KGN8 range (0x20..0x200). */
++		gain_ = AnalogueGainLinear{ 1, 0, 0, 32 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("s5kgnk", CameraSensorHelperS5kgnk)
++
+ class CameraSensorHelperVd55g1 : public CameraSensorHelper
+ {
+ public:
+diff --git a/src/ipa/simple/data/imx858.yaml b/src/ipa/simple/data/imx858.yaml
+new file mode 100644
+index 0000000..3e0a1e0
+--- /dev/null
++++ b/src/ipa/simple/data/imx858.yaml
+@@ -0,0 +1,18 @@
++# SPDX-License-Identifier: CC0-1.0
++#
++# Sony IMX858 (Pixel 9 Pro ultrawide, telephoto, and front), uncalibrated.
++%YAML 1.1
++---
++version: 1
++algorithms:
++  - BlackLevel:
++  - Awb:
++  - Adjust:
++      contrast: 1.2
++      saturation: 1.1
++  - Detail:
++      sharpen: 0.6
++      denoise: 0.015
++      chromaDenoise: 0.03
++  - Agc:
++...
+diff --git a/src/ipa/simple/data/meson.build b/src/ipa/simple/data/meson.build
+index eaef79f..9d78f3e 100644
+--- a/src/ipa/simple/data/meson.build
++++ b/src/ipa/simple/data/meson.build
+@@ -2,10 +2,12 @@
+ 
+ conf_files = files([
+     'imx386.yaml',
++    'imx858.yaml',
+     's5k3j1.yaml',
+     's5kgm5.yaml',
+     's5kgn1.yaml',
+     's5kgn8.yaml',
++    's5kgnk.yaml',
+     'uncalibrated.yaml',
+ ])
+ 
+diff --git a/src/ipa/simple/data/s5kgnk.yaml b/src/ipa/simple/data/s5kgnk.yaml
+new file mode 100644
+index 0000000..332bcf1
+--- /dev/null
++++ b/src/ipa/simple/data/s5kgnk.yaml
+@@ -0,0 +1,18 @@
++# SPDX-License-Identifier: CC0-1.0
++#
++# Samsung S5KGNK (Pixel 9 Pro main camera), uncalibrated.
++%YAML 1.1
++---
++version: 1
++algorithms:
++  - BlackLevel:
++  - Awb:
++  - Adjust:
++      contrast: 1.2
++      saturation: 1.1
++  - Detail:
++      sharpen: 0.6
++      denoise: 0.015
++      chromaDenoise: 0.03
++  - Agc:
++...
+diff --git a/src/libcamera/sensor/camera_sensor_properties.cpp b/src/libcamera/sensor/camera_sensor_properties.cpp
+index a2502a2..ccb176d 100644
+--- a/src/libcamera/sensor/camera_sensor_properties.cpp
++++ b/src/libcamera/sensor/camera_sensor_properties.cpp
+@@ -351,6 +351,16 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
+ 				.hblankDelay = 3
+ 			},
+ 		} },
++		{ "imx858", {
++			.unitCellSize = {},
++			.testPatternModes = {},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
+ 		{ "ov2685", {
+ 			.unitCellSize = { 1750, 1750 },
+ 			.testPatternModes = {
+@@ -559,6 +569,16 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
+ 				.hblankDelay = 2
+ 			},
+ 		} },
++		{ "s5kgnk", {
++			.unitCellSize = {},
++			.testPatternModes = {},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
+ 		{ "vd55g1", {
+ 			.unitCellSize = { 2160, 2160 },
+ 			.testPatternModes = {
+-- 
+2.50.1 (Apple Git-155)
+
