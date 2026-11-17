@@ -521,6 +521,12 @@ def _section(emu, name):
     return sec["sh_addr"], sec["sh_size"]
 
 
+def _exec_sections(emu):
+    secs = [(s["sh_addr"], s["sh_size"]) for s in emu.elf.iter_sections()
+            if s.name in (".text", ".text_pinned")]
+    return secs or [_section(emu, ".text")]
+
+
 def read_regs16(emu, b, e):
     regs = []
     for a in range(b, e, 16):
@@ -563,12 +569,13 @@ def find_layout(emu, name, tables, probe):
     returns candidates from any of the part's virtual tables; one layout
     holds for all of them (they share the base class). Returns the
     candidates of that layout, with a line naming its slots."""
-    text, size = _section(emu, ".text")
+    execs = _exec_sections(emu)
     for si, sm in selector_layouts():
         found = []
         for vt in tables:
             init_fn, modes_fn = emu.u64(vt + 8 * si), emu.u64(vt + 8 * sm)
-            if not (text <= init_fn < text + size and text <= modes_fn < text + size):
+            if not (any(b <= init_fn < b + s for b, s in execs) and
+                    any(b <= modes_fn < b + s for b, s in execs)):
                 continue
             found += probe(vt, init_fn, modes_fn)
         if found:
@@ -583,13 +590,14 @@ EMU_ERRORS = (unicorn.UcError, RuntimeError)
 
 
 def gn1_run_initialisers(emu, near):
-    """Run the library's static initialisers close to the driver: one of
-    them builds the default mode list. Failures are skipped."""
+    """Run the library's static initialisers (close to the driver when
+    near is given, or all of them across pinned/main text): one of them
+    builds the default mode list. Failures are skipped."""
     base, size = _section(emu, ".init_array")
     ran = 0
     for i in range(size // 8):
         fn = emu.u64(base + 8 * i)
-        if abs(fn - near) > 0x80000:
+        if near is not None and abs(fn - near) > 0x80000:
             continue
         try:
             emu.call(fn)
@@ -700,6 +708,12 @@ SAMSUNG_PARTS = {
                    out="s5kgn8-main.bin",
                    reset=[(0xFCFC, 0x4000), (0x6010, 0x0001)],
                    rec=(1264, 0x148), link_rec=0x150, trios=3),
+    # The Pixel 9 Pro's main camera (stock sensor-boitata), model 0x08EF: its
+    # init list starts with its direct-page soft reset (kept in the table), its
+    # mode records are 1424 bytes apart with pixel rate at 0x150 and link raw10
+    # throughput at 0x158, running C-PHY on 3 trios.
+    "s5kgnk": dict(chip=0x08EF, bayer=0, again=(0x20, 0x200), margin=16,
+                   out="s5kgnk-main.bin", reset=[], pll_mult=2),
 }
 SAMSUNG_THIS_SIZE = 0x4000
 SAMSUNG_PAGE = 0xFCFC           # direct-access page; 0x4000 holds the CCS registers
@@ -747,32 +761,31 @@ def samsung_providers(emu, near, holder_off):
             fn = find_function_start(emu, a)
             if fn is not None:
                 ctors.add(fn)
-    text, size = _section(emu, ".text")
-    words = struct.unpack_from(f"<{size // 4}I", d, text)
     found = []
-    for i, w in enumerate(words):
-        if w & 0xFC000000 != 0x94000000:
-            continue
-        pc = text + 4 * i
-        if branch_target(w, pc) not in ctors:
-            continue
-        for k in range(i - 64, i):
-            if words[k] & 0xFC000000 != 0x94000000 or \
-                    _bl_name(emu, text + 4 * k) != "_Znwm" or \
-                    _w0_imm_before(words, k) != 8:
+    for text, size in _exec_sections(emu):
+        words = struct.unpack_from(f"<{size // 4}I", d, text)
+        for i, w in enumerate(words):
+            if w & 0xFC000000 != 0x94000000:
                 continue
-            adrp = [j for j in range(k + 1, k + 4) if words[j] & 0x9F00001F == 0x90000008]
-            if not adrp:
+            pc = text + 4 * i
+            if branch_target(w, pc) not in ctors:
                 continue
-            j = adrp[0]
-            add = [words[m] for m in range(j + 1, j + 4)
-                   if words[m] & 0xFFC003FF == 0x91000108]
-            if not add:
-                continue
-            page = adrp_page(words[j], text + 4 * j)
-            found.append(page + ((add[0] >> 10) & 0xFFF) + 0x10)
-    if not found:
-        found = _samsung_providers_built(emu, words, text, ctors)
+            for k in range(i - 64, i):
+                if words[k] & 0xFC000000 != 0x94000000 or \
+                        _bl_name(emu, text + 4 * k) != "_Znwm" or \
+                        _w0_imm_before(words, k) != 8:
+                    continue
+                adrp = [j for j in range(k + 1, k + 4) if words[j] & 0x9F00001F == 0x90000008]
+                if not adrp:
+                    continue
+                j = adrp[0]
+                add = [words[m] for m in range(j + 1, j + 4)
+                       if words[m] & 0xFFC003FF == 0x91000108]
+                if not add:
+                    continue
+                page = adrp_page(words[j], text + 4 * j)
+                found.append(page + ((add[0] >> 10) & 0xFFF) + 0x10)
+        found += _samsung_providers_built(emu, words, text, ctors)
     return sorted(set(found))
 
 
@@ -824,9 +837,8 @@ def _samsung_providers_built(emu, words, text, ctors):
             if words[k] & 0xFC000000 != 0x94000000 or \
                     _bl_name(emu, text + 4 * k) != "_Znwm":
                 continue
-            sizes = [(x >> 5) & 0xFFFF for x in words[k - 3:k]
-                     if x & 0xFFE0001F == 0x52800000]
-            if not sizes or not 8 <= sizes[-1] <= 0x40:
+            sz = _w0_imm_before(words, k)
+            if sz is None or not 8 <= sz <= 0x40:
                 continue
             for j in range(k + 1, min(k + 40, i)):
                 vt = _adrp_vtable(words, text, j)
@@ -926,6 +938,8 @@ def samsung_candidates(emu, chip, rec_size=SAMSUNG_REC_SIZE, name=None):
                 continue
             if not recs:
                 continue
+            first0 = recs[0][0] % rec_size
+            recs = [(off, r) for off, r in recs if off % rec_size == first0]
             offs = [off for off, _ in recs]
             stride = offs[1] - offs[0] if len(offs) > 1 else rec_size
             if stride != rec_size or any(b - a != stride for a, b in
@@ -962,10 +976,10 @@ def samsung_mode_info(emu, init, rec, regs, part=None):
         return None
     pixel_rate = struct.unpack("<I", emu.read(rec + pr_off, 4))[0]
     fps = pixel_rate / (fll * llp)
-    if not 5 <= fps <= 480:
+    if not 5 <= fps <= 500:
         die(f"mode {w}x{h}: pixel rate {pixel_rate} gives {fps:.1f} fps: "
             "unknown HAL version")
-    rate_hz = EXCK_HZ * mult // pre // post
+    rate_hz = EXCK_HZ * mult // pre // post * p.get("pll_mult", 1)
     if "rec" in p:
         # the record's first words: its minimum and maximum frame rate
         # (floats) and its output size [HAL layout]
@@ -993,7 +1007,7 @@ def build_samsung(hal, part):
     emu = Emu(hal)
     cands = samsung_candidates(emu, p["chip"], p.get("rec", (SAMSUNG_REC_SIZE,))[0],
                                part.upper())
-    cands = [c for c in cands if len(c[0]) >= 100]
+    cands = [c for c in cands if len(c[0]) >= 100 and any(v > 0xFF or d for _, v, d in c[0])]
     if not cands:
         die(f"{part}: init and mode lists not found")
     # The camera's own driver has the most modes; others (a "virtual"
@@ -1141,22 +1155,106 @@ PHY_MAX_LANES = {DCPHY_DPHY: 4, DCPHY_CPHY: 3}
 PHY_OBJ_SIZE = 0x1000
 
 
+def build_imx858(hal, role):
+    """Init and mode lists of one of the Pixel 9 Pro's IMX858 cameras
+    (ultrawide, telephoto, front). The HAL shares the 0x0858 model-ID
+    function across delegated settings providers: 8-bit Sony CCS lists
+    whose mode records are 1424 bytes apart (pixel rate at 0x150)."""
+    emu = Emu(hal)
+    fn = samsung_model_fn(emu, 0x0858)
+    tables = gn1_vtables(emu, fn)
+    if not tables:
+        die("no virtual table holds the IMX858 model-ID function")
+    gn1_run_initialisers(emu, fn)
+    providers = {}
+
+    def probe(vt, init_sel, modes_sel):
+        di, dm = samsung_delegate(emu, init_sel), samsung_delegate(emu, modes_sel)
+        calls, out = [], []
+        if di and dm and di[0] == dm[0]:
+            if di[0] not in providers:
+                providers[di[0]] = samsung_providers(emu, fn, di[0])
+            for pvt in providers[di[0]]:
+                obj = emu._alloc(64)
+                emu.uc.mem_write(obj, struct.pack("<Q", pvt))
+                calls.append((emu.u64(pvt + di[1]), emu.u64(pvt + dm[1]), obj))
+        elif not di and not dm:
+            this = emu._alloc(SAMSUNG_THIS_SIZE)
+            emu.uc.mem_write(this, bytes(SAMSUNG_THIS_SIZE))
+            calls.append((init_sel, modes_sel, this))
+        for init_fn, modes_fn, obj in calls:
+            try:
+                ptr = emu.call(init_fn, obj)
+                cnt = emu.uc.reg_read(A.UC_ARM64_REG_X1)
+                init = read_regs(emu, ptr, ptr + 16 * cnt) if 100 <= cnt < 20000 else None
+                if not init or 0x0136 not in regs_dict(init):
+                    continue
+                begin = emu.call(modes_fn, obj)
+                recs = samsung_mode_vector(emu, begin)
+            except EMU_ERRORS:
+                continue
+            if not recs:
+                continue
+            first0 = recs[0][0] % SAMSUNG_REC_SIZE
+            recs = [(o, r) for o, r in recs if o % SAMSUNG_REC_SIZE == first0]
+            offs = [o for o, _ in recs]
+            if len(offs) > 1 and any(b - a != SAMSUNG_REC_SIZE for a, b in zip(offs, offs[1:])):
+                continue
+            out.append((init, begin, recs))
+        return out
+
+    found = find_layout(emu, "IMX858", tables, probe)
+    variants = []
+    for init, begin, recs in found:
+        modes = []
+        first = recs[0][0] % SAMSUNG_REC_SIZE
+        for off, regs in recs:
+            merged = regs_dict(init)
+            merged.update(regs_dict(regs))
+            info = mode_info(list(merged.items()))
+            if not info:
+                continue
+            rec = begin + off - first
+            hal_rate = struct.unpack("<I", emu.read(rec + SAMSUNG_REC_PIXEL_RATE, 4))[0]
+            if abs(hal_rate - info["pixel_rate"]) > info["pixel_rate"] // 1000:
+                die(f"IMX858 mode {info['width']}x{info['height']}: pixel rate "
+                    f"{info['pixel_rate']} vs the HAL's {hal_rate}: unknown HAL version")
+            info["lanes"] = merged.get(0x0114, 0) + 1
+            modes.append((info, regs))
+        if modes:
+            variants.append((init, samsung_dedupe(modes)))
+    want = {
+        "imx858-uw": lambda ms: any((i["width"], i["height"], i["lanes"]) == (4032, 3024, 3) for i, _ in ms),
+        "imx858-tele": lambda ms: any((i["width"], i["height"], i["lanes"]) == (4032, 3024, 2) for i, _ in ms),
+        "imx858-front": lambda ms: any((i["width"], i["height"], i["lanes"]) == (3840, 2736, 3) for i, _ in ms),
+    }[role]
+    matched = [(init, ms) for init, ms in variants if want(ms)]
+    # Deduplicate identical mode sets if multiple vtables reference the same provider.
+    uniq = {}
+    for init, ms in matched:
+        sig = (len(init), tuple((i["width"], i["height"], i["lanes"]) for i, _ in ms))
+        uniq.setdefault(sig, (init, ms))
+    if len(uniq) != 1:
+        die(f"{role}: expected one IMX858 variant, found {len(uniq)}")
+    return next(iter(uniq.values()))
+
+
 def phy_candidates(emu):
     """gs201: functions that write a trio's register 0x64 (base + 0x100 +
     0x64) to region 10."""
     d = emu.data
-    text, size = _section(emu, ".text")
     hits = set()
-    for a in range(text, text + size - 16, 4):
-        w = struct.unpack_from("<I", d, a)[0]
-        # add w2, wN, #0x164
-        if w & 0xFFFFFC1F != 0x11000000 | (0x164 << 10) | 2:
-            continue
-        near = struct.unpack_from("<8I", d, a - 16)
-        if 0x52800001 | (PHY_REGION << 5) in near:      # mov w1, #10
-            fn = find_function_start(emu, a)
-            if fn is not None:
-                hits.add(fn)
+    for text, size in _exec_sections(emu):
+        for a in range(text, text + size - 16, 4):
+            w = struct.unpack_from("<I", d, a)[0]
+            # add w2, wN, #0x164
+            if w & 0xFFFFFC1F != 0x11000000 | (0x164 << 10) | 2:
+                continue
+            near = struct.unpack_from("<8I", d, a - 16)
+            if 0x52800001 | (PHY_REGION << 5) in near:      # mov w1, #10
+                fn = find_function_start(emu, a)
+                if fn is not None:
+                    hits.add(fn)
     return hits
 
 
@@ -1362,8 +1460,9 @@ ZP_CTLE_EN = 0x4C8       # u8 receive CTLE enable
 ZP_LINK_BASE = 0x4B8     # u64 the link's offset in csis-link-phy
 ZP_PHY_BASE = 0x4C0      # u64 the PHY's offset in csis-link-phy
 ZP_DEVICE = 0x538        # the LWIS device the transaction goes to
-ZP_ZUMAPRO = 0x680       # u8 ro.board.platform is "zumapro" (the Pixel 9a)
+ZP_ZUMAPRO = 0x680       # u8 ro.board.platform is "zumapro"
 ZP_OBJ_SIZE = 0x1000
+ZP_OFFSET_SHIFTS = (0, 0x50)
 # the CTLE preset's optional<u32> fields, in the protobuf's order:
 # control_rout, nc_coef, cap_control, rsel_control, bias_control
 # (the HAL logs them as CntRout, NcCoef, CapCnt, RselCnt, BiasCon)
@@ -1384,7 +1483,7 @@ ZP_CHECK = {DCPHY_DPHY: ((1, 4), (2, 4), (4, 4), (6, 4), (5, 2), (7, 2), (10, 2)
 
 
 def str_xrefs(emu, text_str):
-    """Addresses of 'adrp xN; add xN, xN, #lo' pairs that point at the
+    """Addresses of 'adrp xN; add xM, xN, #lo' pairs that point at the
     NUL-terminated string (any copy of it)."""
     d = emu.data
     key = text_str.encode() + b"\0"
@@ -1393,21 +1492,22 @@ def str_xrefs(emu, text_str):
         if pos and d[pos - 1] == 0:
             targets.append(pos)
         pos = d.find(key, pos + 1)
-    text, size = _section(emu, ".text")
+    execs = _exec_sections(emu)
     out = []
     for t in targets:
-        for rd in range(31):
-            pat = struct.pack("<I", 0x91000000 | ((t & 0xFFF) << 10) | (rd << 5) | rd)
-            a = d.find(pat, text, text + size)
-            while a >= 0:
-                if a % 4 == 0:
-                    for back in range(1, 5):
-                        w = struct.unpack_from("<I", d, a - 4 * back)[0]
-                        if w & 0x9F00001F == 0x90000000 | rd:
-                            if adrp_page(w, a - 4 * back) == t & ~0xFFF:
-                                out.append(a - 4 * back)
-                            break
-                a = d.find(pat, a + 1, text + size)
+        lo12 = t & 0xFFF
+        for text, size in execs:
+            for a in range(text + 4, text + size, 4):
+                w2 = struct.unpack_from("<I", d, a)[0]
+                if w2 >> 22 != 0x244 or ((w2 >> 10) & 0xFFF) != lo12:
+                    continue
+                rn = (w2 >> 5) & 0x1F
+                for back in range(1, 5):
+                    w = struct.unpack_from("<I", d, a - 4 * back)[0]
+                    if w & 0x9F00001F == 0x90000000 | rn:
+                        if adrp_page(w, a - 4 * back) == t & ~0xFFF:
+                            out.append(a - 4 * back)
+                        break
     return out
 
 
@@ -1459,14 +1559,16 @@ def zp_locate(emu):
         ld = _ldst_imm(struct.unpack_from("<I", emu.data, a)[0])
         if ld and ld[1] == 19:
             loads.add(ld[:3])
-    need = {("ldrw", 19, ZP_LINK), ("ldrx", 19, ZP_RATE), ("ldrb", 19, ZP_CPHY),
-            ("ldrb", 19, ZP_CTLE_EN), ("ldrx", 19, ZP_PHY_BASE),
-            ("ldrx", 19, ZP_LINK_BASE), ("ldrx", 19, ZP_DEVICE),
-            ("ldrb", 19, ZP_ZUMAPRO)}
-    if not need <= loads:
+    shift = next((d for d in ZP_OFFSET_SHIFTS if
+                  {("ldrw", 19, ZP_LINK + d), ("ldrx", 19, ZP_RATE + d),
+                   ("ldrb", 19, ZP_CPHY + d), ("ldrb", 19, ZP_CTLE_EN + d),
+                   ("ldrx", 19, ZP_PHY_BASE + d), ("ldrx", 19, ZP_LINK_BASE + d),
+                   ("ldrx", 19, ZP_DEVICE + d), ("ldrb", 19, ZP_ZUMAPRO + d)} <= loads),
+                 None)
+    if shift is None:
         die("zumapro PHY function: its object layout differs: unknown HAL version")
     # The caller's defaults: ldrb wE, [xR, #en]; ldrb wC, [xR, #cphy];
-    # cbz wE, T; cbz wC, T; T clears the enable ("str wzr, [xR, #en]").
+    # cbz wE, T; (cbz|tbz) wC, ...; T clears the enable ("str wzr, [xR, #en]").
     xr = str_xrefs(emu, ZP_CTLE_OFF_LOG)
     found = []
     for x in xr:
@@ -1475,11 +1577,13 @@ def zp_locate(emu):
             l1, l2 = _ldst_imm(w[0]), _ldst_imm(w[1])
             if not (l1 and l2 and l1[0] == l2[0] == "ldrb" and l1[1] == l2[1]):
                 continue
-            if w[2] & 0xFF00001F != 0x34000000 | l1[3] or \
-                    w[3] & 0xFF00001F != 0x34000000 | l2[3]:
+            if w[2] & 0xFF00001F != 0x34000000 | l1[3]:
                 continue
-            t2, t3 = _cbz_target(w[2], a + 8), _cbz_target(w[3], a + 12)
-            if t2 != t3 or not a < t2 < x:
+            if not (w[3] & 0xFF00001F == 0x34000000 | l2[3] or
+                    w[3] & 0xFFF8001F == 0x36000000 | l2[3]):
+                continue
+            t2 = _cbz_target(w[2], a + 8)
+            if not a < t2 < x:
                 continue
             clear = 0xB9000000 | ((l1[2] // 4) << 10) | (l1[1] << 5) | 31
             if clear not in struct.unpack_from("<8I", emu.data, t2):
@@ -1491,15 +1595,15 @@ def zp_locate(emu):
     frag, frag_end, reg, en, cphy = found[0]
     if en - cphy != ZP_CTLE_EN - ZP_CPHY:
         die("zumapro CTLE defaults: the caller's layout differs: unknown HAL version")
-    return fn, end, frag, frag_end, reg, cphy - ZP_CPHY
+    return fn, end, frag, frag_end, reg, cphy - (ZP_CPHY + shift), shift
 
 
 class ZumaproPhy:
     def __init__(self, emu):
         self.emu = emu
         (self.fn, self.end, self.frag, self.frag_end, self.frag_reg,
-         self.delta) = zp_locate(emu)
-        gn1_run_initialisers(emu, self.fn)      # the links' lane tables
+         self.delta, self.shift) = zp_locate(emu)
+        gn1_run_initialisers(emu, None)         # the links' lane tables
         self.cfg = emu._alloc(ZP_OBJ_SIZE + self.delta)
         self.obj = self.cfg + self.delta
         self.dev = emu._alloc(ZP_OBJ_SIZE)
@@ -1546,22 +1650,23 @@ class ZumaproPhy:
         values, ZP_CTLE_FIELDS order); the HAL uses one only on C-PHY and
         clears it on D-PHY."""
         emu, uc = self.emu, self.emu.uc
+        s = self.shift
         uc.mem_write(self.cfg, bytes(ZP_OBJ_SIZE + self.delta))
-        uc.mem_write(self.obj + ZP_CPHY, bytes([kind == DCPHY_CPHY]))
+        uc.mem_write(self.obj + ZP_CPHY + s, bytes([kind == DCPHY_CPHY]))
         if ctle and kind == DCPHY_CPHY:
-            uc.mem_write(self.obj + ZP_CTLE_EN, b"\1")
+            uc.mem_write(self.obj + ZP_CTLE_EN + s, b"\1")
             for off, v in zip(ZP_CTLE_FIELDS, ctle):
-                uc.mem_write(self.obj + off, struct.pack("<IB", v, 1))   # optional<u32>
+                uc.mem_write(self.obj + off + s, struct.pack("<IB", v, 1))   # optional<u32>
         else:
             # the caller's defaults with no CTLE preset for the camera
             uc.reg_write(A.UC_ARM64_REG_X0 + self.frag_reg, self.cfg)
             uc.reg_write(A.UC_ARM64_REG_SP, STACK_BASE + STACK_SIZE - 0x1000)
             uc.emu_start(self.frag, self.frag_end, count=10_000)
-        uc.mem_write(self.obj + ZP_LINK, struct.pack("<ii", link, lanes))
-        uc.mem_write(self.obj + ZP_RATE, struct.pack("<q", rate * 1_000_000))
-        uc.mem_write(self.obj + ZP_LINK_BASE, struct.pack("<QQ", ZP_LINK_STAND_IN, 0))
-        uc.mem_write(self.obj + ZP_DEVICE, struct.pack("<Q", self.dev))
-        uc.mem_write(self.obj + ZP_ZUMAPRO, b"\1")
+        uc.mem_write(self.obj + ZP_LINK + s, struct.pack("<ii", link, lanes))
+        uc.mem_write(self.obj + ZP_RATE + s, struct.pack("<q", rate * 1_000_000))
+        uc.mem_write(self.obj + ZP_LINK_BASE + s, struct.pack("<QQ", ZP_LINK_STAND_IN, 0))
+        uc.mem_write(self.obj + ZP_DEVICE + s, struct.pack("<Q", self.dev))
+        uc.mem_write(self.obj + ZP_ZUMAPRO + s, b"\1")
         uc.reg_write(A.UC_ARM64_REG_X8, emu._alloc(0x40))
         self.entries, self.started, self.done = [], False, False
         emu.call(self.fn, self.obj)
@@ -1734,14 +1839,14 @@ def ctle_preset(path, camera):
         f = dict(_pb_fields(msg))
         if (f.get(1, 0), f.get(2, 0)) != want:
             continue
-        if any(k in f for k in (4, 5, 6)):
-            die("PHY settings: an alternative CTLE or RX EQ preset, which this tool doesn't handle")
+        if any(k in f for k in (5, 6)):
+            die("PHY settings: an RX EQ preset, which this tool doesn't handle")
         if 3 not in f:
             return None
         c = dict(_pb_fields(f[3]))
-        if any(k not in c for k in range(3, 8)):
-            die("PHY settings: a CTLE preset with missing fields, which this tool doesn't handle")
-        return tuple(c[k] for k in range(3, 8))
+        if not any(k in c for k in range(3, 8)):
+            die("PHY settings: an empty CTLE preset, which this tool doesn't handle")
+        return tuple(c.get(k, 0) for k in range(3, 8))
     return None
 
 
@@ -1851,14 +1956,30 @@ def run_imx712(hal, args, out):
         print(f"wrote {out}: install as {FW_DIR}/imx712-uw.bin")
 
 
+def run_imx858(hal, args, out, role):
+    init, modes = build_imx858(hal, role)
+    print(f"{role.upper()} init: {len(init)} register writes")
+    for info, regs in modes:
+        print(f"  mode {info['width']}x{info['height']}: {len(regs)} writes, "
+              f"FLL {info['fll']} LLP {info['llp']}, pixel rate {info['pixel_rate']}, "
+              f"link {info['link_freq']} Hz on {info['lanes']} trios, "
+              f"{info['fps']:.1f} fps, binning {info['binning']}")
+    if not args.list:
+        write_fw(out, init, modes, 0x0858, bayer=IMX712_BAYER)
+        print(f"wrote {out}: install as {FW_DIR}/{role}.bin")
+
+
 SENSORS = {
     "imx386": ("imx386-uw.bin", run_imx386),
     "s5kgn1": ("s5kgn1-main.bin", run_s5kgn1),
     "s5k3j1": ("s5k3j1-front.bin", lambda h, a, o: run_samsung(h, a, o, "s5k3j1")),
     "s5kgm5": ("s5kgm5-tele.bin", lambda h, a, o: run_samsung(h, a, o, "s5kgm5")),
     "s5kgn8": ("s5kgn8-main.bin", lambda h, a, o: run_samsung(h, a, o, "s5kgn8")),
-
+    "s5kgnk": ("s5kgnk-main.bin", lambda h, a, o: run_samsung(h, a, o, "s5kgnk")),
     "imx712": ("imx712-uw.bin", run_imx712),
+    "imx858-uw": ("imx858-uw.bin", lambda h, a, o: run_imx858(h, a, o, "imx858-uw")),
+    "imx858-tele": ("imx858-tele.bin", lambda h, a, o: run_imx858(h, a, o, "imx858-tele")),
+    "imx858-front": ("imx858-front.bin", lambda h, a, o: run_imx858(h, a, o, "imx858-front")),
 }
 # The Pixel 7 Pro's four; the Pixel 9a's are named one at a time.
 ALL_SENSORS = ("imx386", "s5kgn1", "s5k3j1", "s5kgm5")
