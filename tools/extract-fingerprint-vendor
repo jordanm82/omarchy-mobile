@@ -108,7 +108,20 @@ case $DEVICE in
     )
     VENDOR_FILES=(firmware/g7a.app build.prop)
     ;;
-  *) die "unknown device '$DEVICE' (cheetah, panther, tegu)" ;;
+  caiman)
+    # The Pixel 9 Pro: Qualcomm ultrasonic (qfp-daemon against qfs.app) and
+    # the Rust KeyMint.
+    VENDOR_BINS=(
+      bin/hw/qfp-daemon
+      bin/hw/android.hardware.gatekeeper-service.trusty
+      bin/hw/android.hardware.security.keymint-service.rust.trusty
+      bin/storageproxyd
+      bin/trusty_apploader
+      bin/vndservicemanager
+    )
+    VENDOR_FILES=(firmware/qfs.app build.prop)
+    ;;
+  *) die "unknown device '$DEVICE' (cheetah, panther, tegu, caiman)" ;;
 esac
 SRC=$(readlink -f "$1")
 [[ -f "$SRC" ]] || die "no such file: $1"
@@ -341,12 +354,28 @@ while read -r l; do
   [[ -e "$t" ]] || die "dangling symlink in the chroot: ${l#"$root"/} -> $(readlink "$l")"
 done < <(find "$root" -type l)
 
-# Sanity checks: the TA is a signed Trusty app; the HAL is the Goodix one.
-ta=g7.app; [[ $DEVICE == tegu ]] && ta=g7a.app
+# Sanity checks: the TA is a signed Trusty app; the HAL matches the device.
+case $DEVICE in
+  caiman)
+    ta=qfs.app
+    hal=vendor/bin/hw/qfp-daemon
+    hal_pat='qfp-daemon'
+    ;;
+  tegu)
+    ta=g7a.app
+    hal=vendor/bin/hw/android.hardware.biometrics.fingerprint-service.goodix
+    hal_pat='g7_trusty'
+    ;;
+  *)
+    ta=g7.app
+    hal=vendor/bin/hw/android.hardware.biometrics.fingerprint-service.goodix
+    hal_pat='g7_trusty'
+    ;;
+esac
 head -c 64 "$root/vendor/firmware/$ta" | grep -ac TrustyApp >/dev/null ||
   die "$ta does not look like a Trusty application package"
-grep -aq 'g7_trusty' "$root/vendor/bin/hw/android.hardware.biometrics.fingerprint-service.goodix" ||
-  die "the fingerprint HAL is not the Goodix G7 one"
+grep -aq "$hal_pat" "$root/$hal" ||
+  die "the fingerprint HAL does not match $DEVICE"
 
 (cd "$root" && find . -type f -printf '%m %P\n' | LC_ALL=C sort -k2 |
   while read -r mode path; do

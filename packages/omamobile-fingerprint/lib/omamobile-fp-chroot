@@ -78,6 +78,7 @@ fp_device() {
   c=$(tr '\0' '\n' < /proc/device-tree/compatible 2>/dev/null || true)
   case $c in
     *google,zumapro-tegu*) echo tegu ;;
+    *google,zumapro-caiman*) echo caiman ;;
     *google,gs201-panther*) echo panther ;;
     *) echo cheetah ;;
   esac
@@ -88,6 +89,11 @@ DEVICE=$(fp_device)
 # Our touchscreen driver's input device name (synaptics_tcm); panther's
 # case replaces it.
 TOUCH_NAME="Synaptics TouchComm Touchscreen"
+TA_PROBE=goodix
+FP_HAL=/vendor/bin/hw/android.hardware.biometrics.fingerprint-service.goodix
+FP_DEV=/dev/goodix_fp
+FP_MOD=goodix_fp
+LHBM_DEV=""
 case $DEVICE in
   cheetah)
     TA=g7.app
@@ -106,6 +112,18 @@ case $DEVICE in
     # ("On: WxH@Hz") and captures at pointer down, so the circle comes first
     PANEL=1080x2424 PANEL_HZ=120 PANEL_STATE="On: 1080x2424@120" LHBM_FIRST=1
     PANEL_NAME=google-tg4c MAP_STORES=1 ;;
+  caiman)
+    # Pixel 9 Pro: Qualcomm QFS4008 ultrasonic (qfp-daemon against qfs.app,
+    # no LHBM on panel) and Rust KeyMint; Trusty stores as block devices.
+    TA=qfs.app
+    TA_PROBE=qfs
+    KEYMINT=/vendor/bin/hw/android.hardware.security.keymint-service.rust.trusty
+    FP_HAL=/vendor/bin/hw/qfp-daemon
+    FP_DEV=/dev/qbt_ipc
+    FP_MOD=qbt_handler
+    LHBM_DEV=none
+    PANEL=1280x2856 PANEL_HZ=120 PANEL_STATE="On: 1280x2856@120" LHBM_FIRST=0
+    PANEL_NAME=google-cm4 MAP_STORES=1 ;;
   panther)
     # the Pixel 7: the 7 Pro's TA and HALs (its vendor image ships the same
     # files), its own panel (ABL's exynos_drm.panel_name) and touchscreen
@@ -115,7 +133,7 @@ case $DEVICE in
     PANEL=1080x2400 PANEL_HZ=60 PANEL_STATE=on LHBM_FIRST=0
     PANEL_NAME=sdc-s6e3fc3-p10 MAP_STORES=0
     TOUCH_NAME="FocalTech FT3658" ;;
-  *) echo "omamobile-fp: unknown device '$DEVICE' (cheetah, tegu, panther)" >&2; exit 1 ;;
+  *) echo "omamobile-fp: unknown device '$DEVICE' (cheetah, tegu, caiman, panther)" >&2; exit 1 ;;
 esac
 PANEL_NAME=${OMAMOBILE_FP_PANEL_NAME:-$PANEL_NAME}
 PROPS_DEVICE=${OMAMOBILE_FP_PROPS_DEVICE:-/usr/lib/omamobile-fp/props-$DEVICE.conf}
@@ -243,11 +261,11 @@ check() {
   local ok=1 sg
   [[ $EUID -eq 0 ]] || die "run as root"
   [[ -x $CHROOT_BIN ]] || { say "no chroot(1) on the host (coreutils)"; ok=0; }
-  [[ -f $IMAGE/vendor/bin/hw/android.hardware.biometrics.fingerprint-service.goodix ]] ||
+  [[ -f $IMAGE$FP_HAL ]] ||
     { say "no vendor image in $IMAGE (tools/extract-fingerprint-vendor)"; ok=0; }
   [[ -f $SHIM ]] || { say "no shim at $SHIM (fingerprint/Makefile)"; ok=0; }
   [[ -c /dev/trusty-ipc-dev0 ]] || { say "no /dev/trusty-ipc-dev0 (trusty_ipc loaded?)"; ok=0; }
-  [[ -c /dev/goodix_fp ]] || say "no /dev/goodix_fp: only stages before 'hal' can run"
+  [[ -c $FP_DEV ]] || say "no $FP_DEV: only stages before 'hal' can run"
   # trusty_apploader hands g7.app to Trusty in a dma-buf from this heap
   [[ -c /dev/dma_heap/system ]] ||
     say "no /dev/dma_heap/system (modprobe system_heap): only 'storage' can run"
@@ -516,6 +534,8 @@ setup_dev() {
   [[ -n $ev ]] && bind "/dev/input/$ev" "$dev/input/touchscreen" ro
   [[ -c /dev/trusty-log0 ]] && bind /dev/trusty-log0 "$dev/trusty-log0"
   [[ -c /dev/goodix_fp ]] && bind /dev/goodix_fp "$dev/goodix_fp"
+  [[ -c /dev/qbt_fd ]] && bind /dev/qbt_fd "$dev/qbt_fd"
+  [[ -c /dev/qbt_ipc ]] && bind /dev/qbt_ipc "$dev/qbt_ipc"
   # RPMB only: no other SCSI generic node enters the chroot
   bind "/dev/$sg" "$dev/sg-rpmb"
   mkdir -p "$dev/socket" "$dev/binderfs" "$dev/block/by-name"
@@ -577,11 +597,14 @@ link_store() {
 setup_data() {
   mkdir -p "$STATE/data/vendor/ss" "$STATE/data/vendor/fingerprint" \
     "$STATE/data/vendor_de/0/fpdata" "$STATE/data/vendor/goodix" \
+    "$STATE/data/vendor/misc/qti_fp" "$STATE/persist-qti_fp" \
     "$STATE/data/vendor/tombstones/fingerprint" "$STATE/persist-ss" \
     "$STATE/data/vendor/omamobile-fp"
   chmod 0700 "$STATE/data/vendor/omamobile-fp"
   chmod 0700 "$STATE"
   bind "$STATE/data" "$ROOT/data"
+  mkdir -p "$ROOT/mnt/vendor/persist/qti_fp"
+  mount --bind "$STATE/persist-qti_fp" "$ROOT/mnt/vendor/persist/qti_fp"
   # Trusty's tamper-detect-persistent files (stock: persist/ss). We use a
   # Linux-owned copy; FINGERPRINT-RESEARCH.md section 6 explains why.
   mkdir -p "$ROOT/data/vendor/ss/persist"
@@ -660,8 +683,8 @@ start() {
   if [[ -z ${OMAMOBILE_FP_IN_NS:-} ]]; then
     [[ -n $(rpmb_sg) ]] || modprobe sg || true
     [[ $stage == storage || -c /dev/dma_heap/system ]] || modprobe system_heap || true
-    [[ $stage == hal || $stage == bridge ]] && [[ ! -c /dev/goodix_fp ]] &&
-      { modprobe goodix_fp || true; }
+    [[ $stage == hal || $stage == bridge ]] && [[ ! -c $FP_DEV ]] &&
+      { modprobe "$FP_MOD" || true; }
     udevadm settle -t 5 || true
   fi
   check
@@ -715,7 +738,7 @@ start() {
     # Loaded apps stay until reboot, and a request that timed out here may
     # still complete inside Trusty: a second load then fails with "port
     # already registered". So look for the app's port first.
-    if [[ -x $PROBE ]] && "$PROBE" goodix >/dev/null 2>&1; then
+    if [[ -x $PROBE ]] && "$PROBE" "$TA_PROBE" >/dev/null 2>&1; then
       say "$TA already loaded (its port answers)"
     else
       say "loading $TA"
@@ -734,8 +757,8 @@ start() {
   fi
 
   if [[ $stage == hal || $stage == bridge ]]; then
-    [[ -c $ROOT/dev/goodix_fp ]] || die "no /dev/goodix_fp in the chroot"
-    spawn fingerprint vendor /vendor/bin/hw/android.hardware.biometrics.fingerprint-service.goodix
+    [[ -c $ROOT$FP_DEV ]] || die "no $FP_DEV in the chroot"
+    spawn fingerprint vendor "$FP_HAL"
   fi
 
   # The bridge links libbinder_ndk like the HALs, with the vendor search
@@ -747,6 +770,7 @@ start() {
       --ui-state /dev/socket/omamobile-fp-ui/state.json \
       --inhibit /dev/socket/omamobile-fp-ui/inhibit --panel "$PANEL" \
       --lhbm-first "$LHBM_FIRST" \
+      ${LHBM_DEV:+--lhbm "$LHBM_DEV"} \
       ${OMAMOBILE_FP_LHBM_SETTLE_MS:+--settle "$OMAMOBILE_FP_LHBM_SETTLE_MS"}
   fi
 

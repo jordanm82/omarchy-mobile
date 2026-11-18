@@ -41,6 +41,13 @@ fastboot getvar <name>                 # named variables only; never fastboot ge
 fastboot flashing get_unlock_ability
 ```
 
+## 2026-11-18: Stage 11 — Ultrasonic Fingerprint (`qfs4008` / `qbt_handler`)
+
+Verified the Qualcomm `qfs4008` ultrasonic under-display fingerprint sensor on Slot B (`7.3.0-rc6-omamobile-push1-ge8c5cacde030`, commit `82e5e1d2b` on `omamobile-zumapro-caiman-fp`, `CONFIG_QBT_HANDLER=m`) with `omamobile-fingerprint 0.1.19-1`, `omamobile-device-caiman 0.10.0-1`, `libfprint 1.94.100-1.7`, `fprintd 1.94.5-2`, and `D1=A` loop stores ([BRINGUP-M11.md](BRINGUP-M11.md)):
+
+- **PMIC rail, `qbt_handler` driver & DT** `[V]` (`K/`, `R/`): exposed `S2MPG15_PMIC_L22S_CTRL` (`0x44`, voltage group 6) as `ldo22s` (`1.80`–`1.90 V`, `regulator-always-on`), ported Google's GPL `qbt_handler` driver to mainline `gpiod_*`/optional regulator/PM APIs with `!is_wuhb_connected` guards, and wired `qcomfp_intr1` (`gpa7-6`) + `fingerprint` (`"qcom,qbt-handler"`) in `zumapro-caiman.dts`; verified `/dev/qbt_fd`, `/dev/qbt_ipc`, IRQ `gpa7 6 Edge qbt_ipc`, `QBT_IS_WUHB_CONNECTED: 0`, `QBT_TOUCH_FD_VERSION: 3`, and regmap `0x44: 0xac` (`1800 mV`).
+- **Trusty `qfs.app`, AIDL touch routing (`fd_events_src=1`) & two-boot verification** `[V]` (`R/`): extracted `CP3A.261005.005` vendor runtime via `tools/extract-fingerprint-vendor -d caiman`, set `persist.vendor.qfp.fd_events_src=1` in `props-caiman.conf` so `QfpTz` consumes `omamobile-fp-bridge` (`--lhbm none`) AIDL `onPointerDownWithContext`/`onPointerUpWithContext` via an internal `eventfd`, enrolled `right-index-finger` (`[bridge] -> ENROLLED 4`) and authenticated (`MATCH 4`) as `jordan`, and verified auto-start + template persistence (`omamobile-fp-ctl status` `READY 640 2083 117`, `fprintd-list jordan`) across Cold Boot #2.
+
 ## 2026-11-17: Stage 10 — Cameras (`s5kgnk`, 3x `imx858`, `gs201-csis` LoCH, and `libcamera`)
 
 Verified all four cameras (`s5kgnk` Main `4080x3072`, `imx858` Ultrawide `4032x3024`, `imx858` Telephoto `4032x3024`, `imx858` Front `3840x2736`) on Slot B (`7.3.0-rc6-omamobile-push1-g6d2575ca807f-dirty`, committed on `omamobile-zumapro-caiman-camera` as `32264e98e` with `d72154406` and `6d2575ca8`) with `libcamera 0.7.2-4.24` (`0058-...patch`) and `omamobile-device-caiman 0.9.0-1` (`70-omamobile-dma-heap.rules` + `50-omamobile-cameras.conf`) ([BRINGUP-M10.md](BRINGUP-M10.md)):

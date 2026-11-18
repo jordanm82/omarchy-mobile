@@ -1142,7 +1142,15 @@ cmd_kexec() {
   die "phone did not come back after kexec"
 }
 
-in_fastboot() { timeout 3 fastboot devices 2>/dev/null | grep -c . >/dev/null; }
+require_fastboot_tools() {
+  command -v fastboot >/dev/null || die "fastboot not on PATH (source host-tools env)"
+  command -v timeout >/dev/null || die "timeout not on PATH (source host-tools env)"
+}
+
+in_fastboot() {
+  require_fastboot_tools
+  timeout 3 fastboot devices 2>/dev/null | grep -c . >/dev/null
+}
 
 # The one phone in fastboot, by serial, so every check and write reaches
 # the same phone: with two in fastboot (a contributor's and the
@@ -1174,26 +1182,31 @@ cmd_fastboot() {
   [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
     die "fastboot refuses BOOT_METHOD=qcom-abl (panic path uncharacterized on this ABL; use the buttons — see device/$DEVICE/BRINGUP-M1.md)"
   in_fastboot && { say "Already in fastboot"; return 0; }
-  for i in $(seq 1 12); do
+  for i in $(seq 1 4); do
     if adb get-state 2>/dev/null | grep -c device >/dev/null; then
       say "Stock Android: adb reboot bootloader"
       adb reboot bootloader
     elif "$ssh" true 2>/dev/null; then
       say "Our Linux: reboot-to bootloader"
       # dropbear's login PATH omits /usr/local/bin, where the initramfs installs reboot-to
-      "$ssh" '(sleep 1; PATH=/usr/local/bin:$PATH reboot-to bootloader) >/dev/null 2>&1 &' || true
-      sleep 25
+      "$ssh" '(sleep 1; PATH=/usr/local/bin:$PATH reboot-to bootloader) </dev/null >/dev/null 2>&1 &' || true
+      # Wait for the USB link to drop cleanly, then poll fastboot right away.
+      local w
+      for w in $(seq 1 15); do
+        in_fastboot && { say "In fastboot"; return 0; }
+        sleep 1
+      done
       if ! in_fastboot && "$ssh" true 2>/dev/null; then
         say "Bootloader ignored the reason; crashing so it falls back to slot A"
-        "$ssh" '(sleep 1; echo c > /proc/sysrq-trigger) >/dev/null 2>&1 &' || true
+        "$ssh" '(sleep 1; echo c > /proc/sysrq-trigger) </dev/null >/dev/null 2>&1 &' || true
       fi
     fi
     local t
-    for t in $(seq 1 40); do
+    for t in $(seq 1 20); do
       in_fastboot && { say "In fastboot"; return 0; }
       adb get-state 2>/dev/null | grep -c device >/dev/null && break
-      "$ssh" true 2>/dev/null && break
-      sleep 2
+      if ((t > 5)) && "$ssh" true 2>/dev/null; then break; fi
+      sleep 1
     done
   done
   die "could not reach fastboot; use the buttons (Power 30 s, then Volume Down + Power 20 s)"
@@ -1314,7 +1327,7 @@ cmd_push() {
     say "${p}_b ($dev) written and verified"
   done
   say "Rebooting into the new images"
-  "$ssh" 'sync; (sleep 1; PATH=/usr/local/bin:$PATH reboot-to omamobile) >/dev/null 2>&1 &' || true
+  "$ssh" 'sync; (sleep 1; PATH=/usr/local/bin:$PATH reboot-to omamobile) </dev/null >/dev/null 2>&1 &' || true
   sleep 15
   # Judge by the last answer only: a phone that still answered with the old
   # boot id just before it went down did reboot, and then never came back.

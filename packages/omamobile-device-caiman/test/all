@@ -131,8 +131,8 @@ for hook in omamobile-caiman-cpuidle omamobile-caiman-nfc omamobile-caiman-wifi;
   [[ -x $tmp/root/usr/lib/systemd/system-sleep/$hook ]] \
     || fail "$hook sleep hook must be executable"
 done
-[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 37 ]] \
-  || fail "install stages expected 37 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
+[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 38 ]] \
+  || fail "install stages expected 38 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
 grep -qx 'ConditionPathExists=!/usr/share/omamobile/device-caiman/version' \
   "$tmp/root/usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-caiman.conf" \
   || fail "module cleanup guard missing"
@@ -143,6 +143,10 @@ done
 for mod in trusty_core trusty_log trusty_ipc trusty_virtio gsa gs201_aoc_sysmmu mailbox_wc aoc_core aoc_channel_dev aoc_char_dev aoc_alsa_dev aoc_alsa_dev_util snd_soc_cs35l41_spi; do
   grep -qx "blacklist $mod" "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-aoc.conf" \
     || fail "$mod must be blacklisted in omamobile-caiman-aoc.conf"
+done
+for mod in sg qbt_handler; do
+  grep -qx "blacklist $mod" "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-fingerprint.conf" \
+    || fail "$mod must be blacklisted in omamobile-caiman-fingerprint.conf"
 done
 grep -qx 'options gs_decon max_refresh=120 screen_off=2' \
   "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-display.conf" \
