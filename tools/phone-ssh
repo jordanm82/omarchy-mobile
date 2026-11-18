@@ -127,8 +127,10 @@ PYCONTEXT
   # short policy hash leaves room for OpenSSH's temporary 17-byte suffix.
   path="${XDG_RUNTIME_DIR:-/tmp}/omamobile-ssh-$context-%C"
 fi
-# A slow USB link setup can delay the first handshake.
-opts=(-o LogLevel=ERROR -o "ConnectTimeout=$connect_timeout")
+# A slow USB link setup can delay the first handshake; keepalives abort within
+# about 6 s if the phone reboots/crashes and drops the USB link mid-session.
+opts=(-o LogLevel=ERROR -o "ConnectTimeout=$connect_timeout"
+  -o ServerAliveInterval=2 -o ServerAliveCountMax=3)
 [[ -z $proxy ]] || opts+=(-o "ProxyCommand=$proxy")
 [[ -z $config ]] || opts+=(-F "$config")
 if [[ -n $known ]]; then
@@ -145,11 +147,8 @@ case ${1:-} in
   --fresh) shift; opts+=(-o ControlMaster=no -o ControlPath=none) ;;
   --stop) exec ssh "${opts[@]}" -o ControlPath="$path" -O exit "$target" 2>/dev/null ;;
   *)
-    # Keepalives end a master whose phone rebooted within about 6 s, so
-    # calls after a reboot don't wait on a dead connection.
     if [[ ${OMAMOBILE_SSH_SHARE:-0} == 1 ]]; then
-      opts+=(-o ControlMaster=auto -o ControlPath="$path"
-        -o ControlPersist=60 -o ServerAliveInterval=2 -o ServerAliveCountMax=3)
+      opts+=(-o ControlMaster=auto -o ControlPath="$path" -o ControlPersist=60)
     elif ((custom)); then
       # A user's ssh_config may enable sharing globally. Explicit identity
       # and trust options must apply to a new connection unless requested.

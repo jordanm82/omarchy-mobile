@@ -927,8 +927,13 @@ static bool lhbm_lit;
 
 static void lhbm(bool on)
 {
-	int fd = open(lhbm_path, O_WRONLY | O_CLOEXEC);
-	bool ok = fd >= 0 && write(fd, on ? "1" : "0", 1) == 1;
+	int fd;
+	bool ok;
+
+	if (!lhbm_path || !strcmp(lhbm_path, "none"))
+		return;
+	fd = open(lhbm_path, O_WRONLY | O_CLOEXEC);
+	ok = fd >= 0 && write(fd, on ? "1" : "0", 1) == 1;
 
 	if (!ok && on)
 		say("LHBM on refused (%s): screen dark, brightness 0 or allow_lhbm=0?",

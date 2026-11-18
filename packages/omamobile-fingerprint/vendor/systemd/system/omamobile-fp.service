@@ -27,7 +27,8 @@ ConditionPathExists=/dev/trusty-ipc-dev0
 # 30 s after boot) is harmless: the sensor rail stays off until the driver
 # switches it on (FINGERPRINT-PLAN F6).
 ExecStartPre=/usr/bin/modprobe sec_acpm
-ExecStartPre=/usr/bin/modprobe goodix_fp
+ExecStartPre=-/usr/bin/modprobe goodix_fp
+ExecStartPre=-/usr/bin/modprobe qbt_handler
 ExecStart=/usr/lib/omamobile-fp/omamobile-fp-chroot start bridge
 # TERM to the runner only: it stops the bridge and the HALs first and the
 # storage proxy last; whatever is left after the timeout gets KILL.
