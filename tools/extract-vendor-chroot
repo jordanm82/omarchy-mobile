@@ -81,10 +81,10 @@ profile_lists() {
       SYSTEM_BINS=(system/bin/sh system/bin/toybox)
       SYSTEM_FILES=(system/build.prop)
       SYSTEM_DIRS=()
-      # The 9a's GNSS is the S5300's own Kepler core: Samsung's gnssd, its
-      # patch file and configuration run in the same chroot once the CP is
-      # ONLINE (device/tegu/MODEM-PLAN.md F5).
-      if [[ $DEVICE == tegu ]]; then
+      # The 9a/9 Pro's GNSS is the S5300/S5400's own Kepler core: Samsung's
+      # gnssd, its patch file and configuration run in the same chroot once
+      # the CP is ONLINE (device/tegu/MODEM-PLAN.md F5).
+      if [[ $DEVICE == tegu || $DEVICE == caiman ]]; then
         VENDOR_BINS+=(bin/hw/gnssd)
         VENDOR_FILES+=(firmware/kepler.bin etc/gnss/gps.cfg etc/gnss/ca.pem
                        etc/init/init.gnss.rc)
@@ -166,12 +166,12 @@ Usage: extract-vendor-chroot -p PROFILE [-d DEVICE] [-o OUTDIR] [-w WORKDIR] [-f
 
   SOURCE   Google factory zip (DEVICE-*-factory-*.zip) or the
            image-DEVICE-*.zip inside it
-  -p NAME  profile: gnss, gnss-slsi (tegu), modem, waves
+  -p NAME  profile: gnss, gnss-slsi (tegu, caiman), modem, waves
   -o DIR   output directory (default: ./out/vendor-chroot-PROFILE)
   -w DIR   scratch directory for vendor.img and system.img, about 2.5 GB
            (default: a temp dir in \$TMPDIR)
-  -d DEV   cheetah (default), raven (gnss and modem so far) or tegu
-           (gnss-slsi and modem so far)
+  -d DEV   cheetah (default), raven, tegu or caiman
+           (gnss-slsi and modem for tegu/caiman)
   -f       skip the device checks
 
 Install on the phone (from the omamobile repo), e.g. for gnss:
@@ -201,8 +201,8 @@ shift $((OPTIND - 1))
 case $DEVICE in
   cheetah) ;;
   raven) [[ $PROFILE == gnss || $PROFILE == modem ]] || die "raven: gnss and modem profiles only so far" ;;
-  tegu) [[ $PROFILE == gnss-slsi || $PROFILE == modem ]] || die "tegu: gnss-slsi and modem profiles only so far" ;;
-  *) die "unknown device $DEVICE (cheetah, raven or tegu)" ;;
+  tegu|caiman) [[ $PROFILE == gnss-slsi || $PROFILE == modem ]] || die "$DEVICE: gnss-slsi and modem profiles only so far" ;;
+  *) die "unknown device $DEVICE (cheetah, raven, tegu or caiman)" ;;
 esac
 profile_lists "$PROFILE"
 [[ -n $OUT ]] || OUT="./out/vendor-chroot-$PROFILE"

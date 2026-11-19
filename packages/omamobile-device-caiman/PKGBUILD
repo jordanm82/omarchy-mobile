@@ -9,7 +9,7 @@ url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
 depends=(bash systemd kmod omamobile-keyring 'omamobile-audio>=0.5.19')
 optdepends=('bluez-utils: set the Bluetooth controller address from the bootloader')
-provides=(omamobile-device)
+provides=(omamobile-device omamobile-modem-policy omamobile-sitd-policy)
 conflicts=(omamobile-device)
 backup=(etc/pacman.d/omamobile-mirrorlist)
 install=omamobile-device-caiman.install

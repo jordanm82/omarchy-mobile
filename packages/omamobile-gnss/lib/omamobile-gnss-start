@@ -16,10 +16,10 @@ SESSION=/run/omamobile-gnss/session
 STOP_REQUEST=/run/omamobile-gnss/stop-request
 say() { printf 'omamobile-gnss: %s\n' "$*" >&2; }
 
-# the Pixel 9a (zumapro-tegu) runs the gnss-slsi profile, the Pixel 7 Pro gnss
+# the Pixel 9a/9 Pro (zumapro-tegu / zumapro-caiman) run the gnss-slsi profile, the Pixel 7 Pro gnss
 # OMAMOBILE_DT lets the tests run both branches on any machine (as
 # omamobile-setup-user does).
-tegu() { tr -d '\0' < "${OMAMOBILE_DT:-/proc/device-tree}/compatible" 2>/dev/null | grep -c 'google,zumapro-tegu' >/dev/null; }
+tegu() { tr -d '\0' < "${OMAMOBILE_DT:-/proc/device-tree}/compatible" 2>/dev/null | grep -cE 'google,zumapro-(tegu|caiman)' >/dev/null; }
 own_session() {
   [[ ${INVOCATION_ID:-} =~ ^[0-9a-f]{32}$ && -f $SESSION && ! -L $SESSION ]] &&
     [[ $(cat "$SESSION") == "$INVOCATION_ID" ]]

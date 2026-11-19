@@ -41,6 +41,13 @@ fastboot getvar <name>                 # named variables only; never fastboot ge
 fastboot flashing get_unlock_ability
 ```
 
+## 2026-11-19: Stage 12 — Kepler GNSS & Samsung S5400 Modem
+
+Verified Kepler GNSS and Samsung `s5400` modem IPC on Slot B (`7.3.0-rc6-omamobile-push1-g82e5e1d2b6ce-dirty`, commits `1cc43bea9`..`741a82088` on `omamobile-zumapro-caiman-modem`, `DTB_OVERLAYS="aoc-sound modem-cpif"`) with `omamobile-device-caiman 0.11.0-1`, `omamobile-modem 0.1.22-1`, `omamobile-gnss 0.2.10-1`, and `omamobile-modem-sit 0.3.35-1` across two boots ([BRINGUP-M12.md](BRINGUP-M12.md)):
+
+- **SPMI, PCIe RC (`8 MiB` iATU, 16-MSI QMASK quirk), CPIF S5400 & DT** `[V]` (`K/`, `R/`): added `spmi_bit_bang` (`1cc43bea9`) and `s5910` (`c164a6a4d`); updated `pcie-gs201-cp.c` (`70404aa2f`) for 1-lane Gen1 link prepare, `CP_ATU_MEM_SIZE = SZ_8M` (covering EP `BAR0` at `+4 MiB` after four `1 MiB` BARs `2..5`), and Google's `PCI_MSI_FLAGS_QMASK` (`0x4 << 1` = 16 MSIs) `cp_cfg_read` quirk; ported `S5400` and `cp_pmic` into `drivers/soc/google/cpif/` (`f4da35ab5`); wired `pcie_2`, `sw_spmi_pmic`, `s5910`, `s2mpg16` `cp_pmic`, far-alive float/bias pins, `gnss_spi`, and `gnss_ipc` in `zumapro-caiman.dts` (`741a82088`).
+- **RAM-only NV, `ONLINE + @GNSSND`, `omamobile-sitd`, and NMEA streaming across two boots** `[V]` (`R/`): extracted `modem` and `gnss-slsi` chroots via `tools/extract-vendor-chroot`, rebuilt `omamobile-gnss-client` CRT entry (`0x54c8`), created `$STATE/data/vendor/radio/image` in `modem.conf`, and added `omamobile-device-caiman 0.11.0-1` policy (`OMAMOBILE_MODEM_GNSS=1` opt-in). Across clean Boot #1 and Boot #2 (`0` blacklisted modules at boot, `0` failed units on Boot #2), `omamobile-modem.service` trained `PCIe Gen3 x2`, booted `s5400` to `ONLINE` (`rfsd` NV checksum verified) and `gnssd` (`@GNSSND` in `29–30 s`, `CODELOAD->OPERATIONAL`), `/usr/bin/omamobile-sitd --probe` read `SIT GET_SIM_STATUS: error=0`, `radio state 1`, `NR mode [3]`, `PS service [1]` over `/dev/umts_ipc0` (no SIM inserted), `omamobile-gnss-nmea.socket` streamed NMEA sentences over `/run/omamobile-gnss/nmea.sock`, clean stop returned CP to `OFFLINE`, and all NV partitions remained `ro=1` matching `tools/nv-backup` (`SHA-256` identical, `ufs_err=0`).
+
 ## 2026-11-18: Stage 11 — Ultrasonic Fingerprint (`qfs4008` / `qbt_handler`)
 
 Verified the Qualcomm `qfs4008` ultrasonic under-display fingerprint sensor on Slot B (`7.3.0-rc6-omamobile-push1-ge8c5cacde030`, commit `82e5e1d2b` on `omamobile-zumapro-caiman-fp`, `CONFIG_QBT_HANDLER=m`) with `omamobile-fingerprint 0.1.19-1`, `omamobile-device-caiman 0.10.0-1`, `libfprint 1.94.100-1.7`, `fprintd 1.94.5-2`, and `D1=A` loop stores ([BRINGUP-M11.md](BRINGUP-M11.md)):
