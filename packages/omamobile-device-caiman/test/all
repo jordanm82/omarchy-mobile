@@ -131,11 +131,24 @@ for hook in omamobile-caiman-cpuidle omamobile-caiman-nfc omamobile-caiman-wifi;
   [[ -x $tmp/root/usr/lib/systemd/system-sleep/$hook ]] \
     || fail "$hook sleep hook must be executable"
 done
-[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 38 ]] \
-  || fail "install stages expected 38 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
+[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 45 ]] \
+  || fail "install stages expected 45 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
+grep -qx 'Environment=OMAMOBILE_MODEM_GNSS=1' \
+  "$tmp/root/usr/lib/systemd/system/omamobile-modem.service.d/20-gnss.conf" \
+  || fail "modem GNSS drop-in missing"
 grep -qx 'ConditionPathExists=!/usr/share/omamobile/device-caiman/version' \
   "$tmp/root/usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-caiman.conf" \
   || fail "module cleanup guard missing"
+for mod in spmi_bit_bang s5910 cp_pmic pcie_gs201_cp shm_ipc cpif gnss_spi gnssif; do
+  grep -qx "blacklist $mod" "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-modem.conf" \
+    || fail "missing modem blacklist for $mod"
+done
+grep -qx 'pcie-gs201-cp allow_hw=1' "$tmp/root/usr/lib/omamobile-modem/link.conf" \
+  || fail "link.conf missing pcie-gs201-cp allow_hw=1"
+grep -qx 'gnss_spi' "$tmp/root/usr/lib/omamobile-modem/link.conf" \
+  || fail "link.conf missing gnss_spi"
+grep -qx 'gnssif' "$tmp/root/usr/lib/omamobile-modem/link.conf" \
+  || fail "link.conf missing gnssif"
 for mod in panthor gs_decon cs40l26_vibra leds_lm3644 max77779_battery phy_zuma_pcie pcie_gs201 brcmfmac hci_uart nxp_nci_i2c; do
   grep -qx "blacklist $mod" "$tmp/root/usr/lib/modprobe.d/omamobile-caiman-guards.conf" \
     || fail "$mod must be blacklisted for autoload"
