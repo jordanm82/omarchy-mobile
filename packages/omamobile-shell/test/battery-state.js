@@ -11,9 +11,11 @@ const home = read('omamobile.home/BatteryWidget.qml')
 const bar = read('omamobile.bar/Bar.qml')
 const quick = read('omamobile.quicksettings/QuickSettings.qml')
 const statusModel = require(path.resolve(root, 'plugins/omamobile.bar/StatusModel.js'))
-assert.strictEqual(statusModel.batteryIcon(91, false, true), '󰁹',
-  'Full below 100% must use the full battery glyph without a charging bolt')
-assert.notStrictEqual(statusModel.batteryIcon(91, true, false), '󰁹',
+assert.strictEqual(statusModel.batteryIcon(91, false, true, false), '󰁹',
+  'Unplugged Full must use the full battery glyph without a charging bolt')
+assert.strictEqual(statusModel.batteryIcon(94, false, true, true), '󰂅',
+  'Plugged-in Full must show the plugged/charging glyph')
+assert.notStrictEqual(statusModel.batteryIcon(91, true, false, true), '󰁹',
   'Charging must retain its charging glyph')
 function capture(text, pattern, name) {
   const match = text.match(pattern)
@@ -24,27 +26,34 @@ const binding = (text, name) => capture(text, new RegExp(`readonly property (?:b
 const S = { Unknown: 0, Charging: 1, Discharging: 2, Empty: 3, FullyCharged: 4, PendingCharge: 5, PendingDischarge: 6 }
 const evaluate = (expr, ctx) => vm.runInNewContext(expr, ctx)
 const barCharging = binding(bar, 'charging')
+const barPlugged = binding(bar, 'plugged')
 assert.strictEqual(evaluate(barCharging, { hasBattery: true, battery: { state: S.Unknown },
   UPower: { onBattery: false }, UPowerDeviceState: S }), false, 'unknown state must not show charging')
+assert.strictEqual(evaluate(barPlugged, { hasBattery: true, battery: { state: S.FullyCharged },
+  charging: false, UPower: { onBattery: false }, UPowerDeviceState: S }), true, 'external power must show plugged')
 const homeCharging = binding(home, 'charging')
+const homePlugged = binding(home, 'plugged')
 const homeDischarging = binding(home, 'discharging')
 const homeSeconds = binding(home, 'seconds')
 const homeDetail = capture(home, /readonly property string detail: ([\s\S]*?)\n\n/, 'battery detail')
 const duration = capture(home, /(function duration\(s\) \{[\s\S]*?\n  \})/, 'duration')
 const quickText = capture(quick, /text: (root\.hasBattery\s*\n\s*\?[^\n]+\n\s*: "")/, 'quick settings battery text')
 
-function state(state, present = true) {
-  const battery = present ? { state, percentage: .5, timeToFull: 3600, timeToEmpty: 7200 } : null
-  // External power can be present even when the device does not report charging.
-  const ctx = { battery, present, hasBattery: present, UPowerDeviceState: S, UPower: { onBattery: false } }
+function state(state, present = true, onBattery = false, percentage = .5) {
+  const battery = present ? { state, percentage, timeToFull: 3600, timeToEmpty: 7200 } : null
+  const ctx = { battery, present, hasBattery: present, percent: present ? Math.round(percentage * 100) : -1,
+    UPowerDeviceState: S, UPower: { onBattery } }
   ctx.charging = evaluate(homeCharging, ctx)
+  ctx.plugged = evaluate(homePlugged, ctx)
   ctx.discharging = evaluate(homeDischarging, ctx)
   ctx.full = present && state === S.FullyCharged
   ctx.seconds = evaluate(homeSeconds, ctx)
   ctx.duration = evaluate('(' + duration + ')', ctx)
   return {
     homeCharging: ctx.charging,
+    homePlugged: ctx.plugged,
     barCharging: evaluate(barCharging, ctx),
+    barPlugged: evaluate(barPlugged, { ...ctx, charging: evaluate(barCharging, ctx) }),
     text: evaluate(quickText, { ...ctx, root: { hasBattery: present, battery } }),
     detail: evaluate(homeDetail, ctx),
   }
@@ -52,17 +61,22 @@ function state(state, present = true) {
 
 for (const [value, text] of [[S.Unknown, 'Charging status unknown'], [S.PendingCharge, 'Waiting to charge'],
   [S.PendingDischarge, 'Waiting to discharge'], [S.Empty, 'Empty'], [S.FullyCharged, 'Full']]) {
-  const got = state(value)
+  const got = state(value, true, true)
   assert.strictEqual(got.homeCharging, false)
+  assert.strictEqual(got.homePlugged, false)
   assert.strictEqual(got.barCharging, false)
   assert.strictEqual(got.text, '󰁹 50%')
   assert.strictEqual(got.detail, text)
 }
+assert.strictEqual(state(S.FullyCharged, true, false, .94).text, '󰂄 94%')
+assert.strictEqual(state(S.FullyCharged, true, false, .94).detail, 'Plugged in')
+assert.strictEqual(state(S.FullyCharged, true, false, 1).detail, 'Full')
+assert.strictEqual(state(S.PendingCharge, true, false, .94).detail, 'Plugged in')
 assert.strictEqual(state(S.Charging).detail, 'Full in 1 h 0 min')
 assert.strictEqual(state(S.Charging).homeCharging, true)
 assert.strictEqual(state(S.Charging).text, '󰂄 50%')
 assert.strictEqual(state(S.Charging).barCharging, true)
-assert.strictEqual(state(S.Discharging).detail, '2 h 0 min left')
+assert.strictEqual(state(S.Discharging, true, true).detail, '2 h 0 min left')
 assert.strictEqual(state(S.Unknown, false).detail, 'No battery')
 assert.strictEqual(state(S.Unknown, false).text, '')
 console.log('ok - explicit battery states in home, bar and quick settings')

@@ -25,6 +25,8 @@ while IFS= read -r -d '' file; do
 done < <(find vendor -type l -print0)
 stage 644 uwsm/env.d/omamobile-caiman-graphics \
   "$destination/usr/share/uwsm/env.d/omamobile-caiman-graphics"
+stage 644 uwsm/env.d/omamobile-caiman-display \
+  "$destination/usr/share/uwsm/env.d/omamobile-caiman-display"
 stage 644 wireplumber/50-omamobile-cameras.conf \
   "$destination/usr/share/wireplumber/wireplumber.conf.d/50-omamobile-cameras.conf"
 stage 644 device.conf \

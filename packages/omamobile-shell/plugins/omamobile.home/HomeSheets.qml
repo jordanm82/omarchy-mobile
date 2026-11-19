@@ -1257,6 +1257,20 @@ Item {
             text: settingsFlick.config.dateFormat || ""
             onTextEdited: settingsFlick.put("dateFormat", text)
           }
+          Item {
+            visible: settingsFlick.item && settingsFlick.item.type === "clock"
+            width: parent.width; height: sheets.touch
+            Text {
+              anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.PlainText; text: "Transparent background"
+              color: sheets.fg; font.family: Style.font.family; font.pixelSize: Style.font.title
+            }
+            ToggleSwitch {
+              anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+              checked: settingsFlick.value("transparent") !== false
+              onToggled: settingsFlick.put("transparent", !checked)
+            }
+          }
 
           // -- weather
           Item {

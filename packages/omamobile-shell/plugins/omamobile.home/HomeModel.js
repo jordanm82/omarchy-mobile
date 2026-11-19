@@ -25,7 +25,7 @@ var LIMITS = { minColumns: 3, maxColumns: 6, minRows: 4, maxRows: 8, maxPages: 1
 // internet and stay off until the user turns them on in their settings.
 var REGISTRY = {
   clock:   { name: "Clock",          icon: "󰥔", min: [2, 1], max: [4, 3], size: [4, 2], network: false,
-             config: { timeFormat: "", dateFormat: "dddd d MMMM" } },
+             config: { timeFormat: "", dateFormat: "dddd d MMMM", transparent: true } },
   weather: { name: "Weather",        icon: "󰖐", min: [2, 1], max: [4, 2], size: [4, 1], network: true,
              config: { enabled: false, useLocation: true, place: "", latitude: null, longitude: null, units: "celsius" } },
   battery: { name: "Battery",        icon: "󰁹", min: [1, 1], max: [4, 2], size: [2, 1], network: false, config: {} },
@@ -191,8 +191,10 @@ function portPlacements(raw) {
 
 // What a fresh home gets, before the user changes anything: a clock and the
 // first of these apps that are installed along the bottom row.
-var DEFAULT_APPS = ["chromium", "Alacritty", "org.gnome.Nautilus", "omarchy-menu", "org.omarchy.settings",
-                    "foot", "org.gnome.Calculator", "omawrite", "nvim", "localsend"]
+var DEFAULT_APPS = ["org.omamobile.Phone", "org.omamobile.Messages", "chromium", "omacam",
+                    "org.omamobile.Contacts", "org.omamobile.Settings", "foot", "Alacritty",
+                    "org.gnome.Nautilus", "omarchy-menu", "org.omarchy.settings",
+                    "org.gnome.Calculator", "omawrite", "nvim", "localsend"]
 
 function clampInt(value, lo, hi, fallback) {
   var n = Math.round(Number(value))

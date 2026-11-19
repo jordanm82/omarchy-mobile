@@ -264,7 +264,25 @@ Item {
   readonly property color foreground: Commons.Color.menu.text
   readonly property int touch: Math.max(44, Style.space(44))
   readonly property int inputHeight: Math.max(48, Style.space(48))
-  readonly property int dockHeight: inputHeight + Style.spacing.xxl * 2
+  property int deviceSafeInsetX: 0
+  property int deviceSafeInsetBottom: 0
+  FileView {
+    path: "/usr/share/omamobile/device.conf"
+    blockLoading: true
+    printErrors: false
+    onLoaded: {
+      var body = String(text() || "")
+      var mx = body.match(/^SAFE_INSET_X=([0-9]+)$/m)
+      var mb = body.match(/^SAFE_INSET_BOTTOM=([0-9]+)$/m)
+      root.deviceSafeInsetX = mx ? parseInt(mx[1], 10) || 0 : 0
+      root.deviceSafeInsetBottom = mb ? parseInt(mb[1], 10) || 0 : 0
+    }
+  }
+  readonly property int safeInsetX: Math.max(0, (Quickshell.env("OMAMOBILE_SAFE_INSET_X") || "") !== ""
+    ? (parseInt(Quickshell.env("OMAMOBILE_SAFE_INSET_X"), 10) || 0) : deviceSafeInsetX)
+  readonly property int safeInsetBottom: Math.max(0, (Quickshell.env("OMAMOBILE_SAFE_INSET_BOTTOM") || "") !== ""
+    ? (parseInt(Quickshell.env("OMAMOBILE_SAFE_INSET_BOTTOM"), 10) || 0) : deviceSafeInsetBottom)
+  readonly property int dockHeight: inputHeight + Style.spacing.xxl * 2 + safeInsetBottom
   // The dock shows on every empty workspace, under the drawer too: it
   // reserves no space (ExclusionMode.Ignore), so neither its coming and
   // going nor the drawer's opening resizes any window. The home screen keeps
@@ -448,7 +466,10 @@ Item {
 
         SearchPill {
           anchors.fill: parent
-          anchors.margins: Style.spacing.xxl
+          anchors.topMargin: Style.spacing.xxl
+          anchors.leftMargin: Math.max(Style.spacing.xxl, root.safeInsetX)
+          anchors.rightMargin: Math.max(Style.spacing.xxl, root.safeInsetX)
+          anchors.bottomMargin: Style.spacing.xxl + root.safeInsetBottom
           placeholder: (root.hasAgent ? "Search apps or ask " + root.agentName + "…" : "Search apps…")
           onTapped: root.expand()
           // Hold: the voice bar, as a hold on the pill over an app.
@@ -960,8 +981,8 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: inputRow.top
-        anchors.leftMargin: Style.spacing.xxl
-        anchors.rightMargin: Style.spacing.xxl
+        anchors.leftMargin: Math.max(Style.spacing.xxl, root.safeInsetX)
+        anchors.rightMargin: Math.max(Style.spacing.xxl, root.safeInsetX)
         anchors.bottomMargin: Style.spacing.lg
         height: Math.max(root.touch, Style.space(52))
         radius: Style.cornerRadius
@@ -1064,7 +1085,10 @@ Item {
         TextField {
           id: input
           anchors.fill: parent
-          anchors.margins: Style.spacing.xxl
+          anchors.topMargin: Style.spacing.xxl
+          anchors.leftMargin: Math.max(Style.spacing.xxl, root.safeInsetX)
+          anchors.rightMargin: Math.max(Style.spacing.xxl, root.safeInsetX)
+          anchors.bottomMargin: Style.spacing.xxl + root.safeInsetBottom
           verticalAlignment: TextInput.AlignVCenter
           font.pixelSize: Style.font.title
           leftPadding: Style.spacing.controlPaddingX + Style.font.iconLarge + Style.spacing.xl

@@ -82,6 +82,8 @@ Item {
   readonly property int touch: 44
   readonly property int inputHeight: 48
   readonly property int dockHeight: inputHeight + Style.spacing.xxl * 2
+  readonly property int safeInsetX: 0
+  readonly property int safeInsetBottom: 0
   property var screenInfo: ({ width: 412, height: 892 })
   function drawerColumns(width) { return 4 }
   readonly property bool hasAgent: false

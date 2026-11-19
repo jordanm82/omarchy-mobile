@@ -17,6 +17,7 @@ Item {
   readonly property bool present: !!battery && battery.isPresent === true
   readonly property int percent: present ? Math.round(battery.percentage * 100) : -1
   readonly property bool charging: present && battery.state === UPowerDeviceState.Charging
+  readonly property bool plugged: present && (charging || !UPower.onBattery)
   readonly property bool discharging: present && battery.state === UPowerDeviceState.Discharging
   readonly property bool full: present && battery.state === UPowerDeviceState.FullyCharged
   readonly property real seconds: charging ? battery.timeToFull : discharging ? battery.timeToEmpty : 0
@@ -28,15 +29,15 @@ Item {
   }
 
   readonly property string detail: !present ? "No battery"
-    : full ? "Full"
+    : full ? (plugged && percent < 99 ? "Plugged in" : "Full")
     : charging ? (duration(seconds) ? "Full in " + duration(seconds) : "Charging")
     : discharging ? (duration(seconds) ? duration(seconds) + " left" : "On battery")
-    : battery.state === UPowerDeviceState.PendingCharge ? "Waiting to charge"
+    : battery.state === UPowerDeviceState.PendingCharge ? (plugged ? "Plugged in" : "Waiting to charge")
     : battery.state === UPowerDeviceState.PendingDischarge ? "Waiting to discharge"
     : battery.state === UPowerDeviceState.Empty ? "Empty"
     : "Charging status unknown"
 
-  readonly property color levelColor: percent >= 0 && percent <= 15 && !charging ? Commons.Color.urgent : Commons.Color.accent
+  readonly property color levelColor: percent >= 0 && percent <= 15 && !charging && !plugged ? Commons.Color.urgent : Commons.Color.accent
   readonly property bool compact: width < 100
 
   Row {
@@ -82,7 +83,7 @@ Item {
 
       Text {
         textFormat: Text.PlainText
-        text: (widget.percent >= 0 ? widget.percent + "%" : "–") + (widget.charging && !widget.full ? " 󱐋" : "")
+        text: (widget.percent >= 0 ? widget.percent + "%" : "–") + ((widget.charging || widget.plugged) ? " 󱐋" : "")
         color: widget.home ? widget.home.foreground : "white"
         font.family: Style.font.family
         font.pixelSize: Style.font.displayLarge

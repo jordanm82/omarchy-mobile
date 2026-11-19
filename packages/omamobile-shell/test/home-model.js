@@ -54,6 +54,11 @@ test("the default layout uses only installed apps", () => {
   assert.deepStrictEqual(apps, ["chromium", "foot"])
   assert.strictEqual(l.pages.length, 2)
   assert.deepStrictEqual(M.parse(M.serialize(l)), l)
+  const mobile = M.defaultLayout(["org.gnome.Nautilus", "omacam", "chromium", "org.omamobile.Messages", "org.omamobile.Phone", "foot"], grid)
+  const mobileApps = mobile.pages[0].items.filter((i) => i.kind === "app").map((i) => i.app)
+  assert.deepStrictEqual(mobileApps, ["org.omamobile.Phone", "org.omamobile.Messages", "chromium", "omacam"])
+  const clock = mobile.pages[0].items.find((i) => i.kind === "widget" && i.type === "clock")
+  assert.strictEqual(clock.config.transparent, true)
 })
 
 test("garbage reads as no layout", () => {

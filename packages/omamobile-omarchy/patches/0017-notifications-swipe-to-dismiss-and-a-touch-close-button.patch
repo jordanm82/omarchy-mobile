@@ -1,33 +1,118 @@
 # SPDX-License-Identifier: MIT
-# Notifications: swipe to dismiss, and a close button on touch screens. On a
-# touch screen a tap runs the toast's default action and there is no right
-# button, so a toast could only be got rid of by letting it launch something,
-# and a critical one (Omarchy's first-run invitations) never expires. A
-# sideways swipe now moves the card with the finger: let go past 35% of its
-# width, or flick it, and it flies off that side and closes as a right-click
-# does; short of that it springs back. The drag starts only past a threshold,
-# so a tap still runs the default action, and it is off while a reply is
-# being typed. When Hyprland lists a touch screen, each toast also gets a
-# close glyph with a 44 px target in its top-right corner; a seat with only a
-# mouse shows none, so desktops look as before. Hover pauses the countdown
-# for a mouse or stylus only (a finger doesn't hover), and a card being
-# swiped doesn't expire under the finger. Right-click still closes.
+# Notifications: swipe to dismiss, a 25% touch close box with a vertical
+# separator, and a 15 s timeout for critical notifications on touch screens.
+# On a touch screen a tap runs the toast's default action and there is no right
+# button; a sideways swipe moves the card with the finger and dismisses past
+# 25% of its width, while the right 25% of the toast body (separated by a
+# hairline above any action/reply row) is an always-enabled close box with a
+# centered X. Mouse/trackpad/stylus hover (via HoverHandler) expands and pauses
+# the deck without letting touch-synthesized pointer hover freeze timeouts, and
+# critical notifications expire after 15 s instead of pinning permanently.
 #
 # Against Omarchy 4.0.6 (edge 4.0.6-1) with 0015 (inline reply) applied.
 #
-# Omarchy 4.5: Use the Toast scene's independent horizontal translation and a persistent
-# 40 px close target. Preserve mouse actions and disable dragging during reply.
+# Omarchy 4.5: Use the Toast scene's independent horizontal translation, a right
+# 25% touch close box with a divider above deeds/reply, 15 s critical timeouts
+# (including restored rows), and non-touch HoverHandler gating.
 
+diff --git i/shell/plugins/notifications/Service.qml w/shell/plugins/notifications/Service.qml
+--- i/shell/plugins/notifications/Service.qml
++++ w/shell/plugins/notifications/Service.qml
+@@ -140,13 +140,14 @@
+   // ------------------------------------------------------------- lifetime
+   readonly property int lowDuration: 5000
+   readonly property int normalDuration: 8000
++  readonly property int criticalDuration: 15000
+   readonly property int maxDuration: 30000
+ 
+-  // Critical waits for you. Everything else gets at least its urgency's
+-  // minimum, stretched up to 30s when the sender asks for longer.
++  // Critical notifications time out too (15 s) so touch users are never
++  // left with permanent popups; everything else uses its urgency minimum.
+   function durationFor(urgency, requested) {
+-    if (urgency === NotificationUrgency.Critical) return 0
+-    var base = urgency === NotificationUrgency.Low ? lowDuration : normalDuration
++    var base = urgency === NotificationUrgency.Critical ? criticalDuration
++             : (urgency === NotificationUrgency.Low ? lowDuration : normalDuration)
+     return Math.min(maxDuration, Math.max(base, requested > 0 ? requested : 0))
+   }
+ 
+@@ -1367,6 +1368,7 @@
+          replay ? i >= 0 : i < rows.length; i += replay ? -1 : 1) {
+       var row = Store.restored(rows[i])
+       if (!row) continue
++      if (row.duration <= 0) row.duration = durationFor(row.urgency, row.expireTimeout)
+       if (liveKeys[row.key]) {
+         // Startup must not overwrite a newer live arrival. Replaying the same
+         // entry deliberately creates a separate card.
+@@ -1581,6 +1583,23 @@
+           width: service.notificationWidth
+           height: service.deckHeight
+ 
++          // Only mouse/trackpad/stylus hover expands and pauses the deck; a
++          // touchscreen tap must not leave synthetic hover stuck over toasts.
++          HoverHandler {
++            id: pointerHover
++            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
++            onHoveredChanged: {
++              service.pointerIn = hovered
++              if (hovered) {
++                service.pointerEntered(undefined)
++                hoverArea.hoverAt(point.position.x, point.position.y)
++              } else {
++                service.hoverKey = ""
++                service.pointerLeft()
++              }
++            }
++          }
++
+           // One hover region over the whole deck, so crossing between cards does
+           // not flicker it shut. It accepts no buttons; clicks reach the cards.
+           MouseArea {
+@@ -1588,7 +1607,7 @@
+             z: 5000
+             anchors.fill: parent
+             anchors.margins: -Style.space(4)
+-            hoverEnabled: true
++            hoverEnabled: pointerHover.hovered
+             acceptedButtons: Qt.NoButton
+             propagateComposedEvents: true
+ 
+@@ -1613,13 +1632,14 @@
+               target: service
+               function onSettled() {
+                 Qt.callLater(function() {
+-                  if (hoverArea.containsMouse)
++                  if (pointerHover.hovered && hoverArea.containsMouse)
+                     hoverArea.hoverAt(hoverArea.mouseX, hoverArea.mouseY)
+                 })
+               }
+             }
+ 
+             onContainsMouseChanged: {
++              if (!pointerHover.hovered) return
+               service.pointerIn = containsMouse
+               if (containsMouse) {
+                 service.pointerEntered(undefined)
+@@ -1630,6 +1650,7 @@
+               }
+             }
+             onPositionChanged: function(mouse) {
++              if (!pointerHover.hovered) return
+               hoverAt(mouse.x, mouse.y)
+ 
+               // Which deck you are over decides which opens.
 diff --git i/shell/plugins/notifications/Toast.qml w/shell/plugins/notifications/Toast.qml
 --- i/shell/plugins/notifications/Toast.qml
 +++ w/shell/plugins/notifications/Toast.qml
-@@ -28,6 +28,23 @@
+@@ -28,6 +28,24 @@
    property real cardWidth: Style.space(380)
    property string replyPlaceholder: ""
    property bool replyOpen: false
 +  property real swipeOffset: 0
 +  transform: Translate { x: card.swipeOffset }
 +  DragHandler {
++    id: swipeDrag
 +    target: null
 +    enabled: !card.replyOpen && !card.place.hidden && !card.place.leaving
 +    acceptedDevices: PointerDevice.TouchScreen
@@ -45,26 +130,145 @@ diff --git i/shell/plugins/notifications/Toast.qml w/shell/plugins/notifications
    signal replyRequested()
    signal replyCancelled()
    signal replySent(string text)
-@@ -454,7 +471,7 @@
-                 anchors.centerIn: parent
-                 text: card.ago()
-                 color: card.dimColor
+@@ -157,7 +175,7 @@
+   // time, and gets a fresh display period of its own duration. Its picture
+   // may be new at the same path, so the image is read again too.
+   property real remaining: Number(row.duration || 0)
+-  readonly property bool ticking: Number(row.duration || 0) > 0 && !paused && !replyOpen
++  readonly property bool ticking: Number(row.duration || 0) > 0 && !paused && !replyOpen && !swipeDrag.active
+   readonly property string arrival: String(row.ts) + ":" + String(row.duration)
+   property bool reloading: false
+   onArrivalChanged: {
+@@ -248,13 +266,14 @@
+     id: body
+     width: parent.width
+     height: card.drawnHeight
++    readonly property real closeZoneWidth: Math.max(Style.space(52), Math.round((plate.width - plate.borderLeft - plate.borderRight) * 0.25))
+ 
+     Row {
+       id: layout
+       // Top-anchored: centred content would slide up as the card grows.
+       anchors { left: parent.left; right: parent.right; top: parent.top
+                 leftMargin: plate.contentLeftInset + Style.space(12)
+-                rightMargin: plate.contentRightInset + Style.space(12)
++                rightMargin: plate.borderRight + body.closeZoneWidth + Style.space(10)
+                 topMargin: plate.contentTopInset + card.contentPaddingY }
+       spacing: thumb.compact ? Style.space(8) : Style.space(12)
+ 
+@@ -440,55 +459,15 @@
+             anchors.right: parent.right
+             anchors.verticalCenter: title.verticalCenter
+             spacing: Style.space(5)
+-
+-            // The time and the hover close mark share one square and
+-            // crossfade, so nothing in the headline moves.
+-            Item {
+-              width: Math.max(stamp.implicitWidth, shut.implicitWidth)
+-              height: Math.max(stamp.implicitHeight, shut.implicitHeight)
+-              anchors.verticalCenter: parent.verticalCenter
+-
+-              Text {
+-                textFormat: Text.PlainText
+-                id: stamp
+-                anchors.centerIn: parent
+-                text: card.ago()
+-                color: card.dimColor
 -                opacity: card.hovered ? 0 : 1
-+                opacity: 0
-                 visible: opacity > 0.01
-                 font.family: Style.font.family
-                 font.pixelSize: Style.font.bodySmall
-@@ -465,10 +482,10 @@
-                 id: shut
-                 anchors.right: parent.right
-                 anchors.verticalCenter: parent.verticalCenter
+-                visible: opacity > 0.01
+-                font.family: Style.font.family
+-                font.pixelSize: Style.font.bodySmall
+-                Behavior on opacity { NumberAnimation { duration: card.fade; easing.type: Easing.InOutQuad } }
+-              }
+ 
+-              Item {
+-                id: shut
+-                anchors.right: parent.right
+-                anchors.verticalCenter: parent.verticalCenter
 -                implicitWidth: closeMark.implicitWidth + Style.space(6)
 -                implicitHeight: closeMark.implicitHeight
-+                implicitWidth: Math.max(Style.space(40), closeMark.implicitWidth + Style.space(6))
-+                implicitHeight: Math.max(Style.space(40), closeMark.implicitHeight)
-                 enabled: card.hovered
+-                enabled: card.hovered
 -                opacity: card.hovered ? 1 : 0
-+                opacity: 1
-                 visible: opacity > 0.01
-                 readonly property bool hot: card.pointerOver(shut)
-                 Behavior on opacity { NumberAnimation { duration: card.fade; easing.type: Easing.InOutQuad } }
+-                visible: opacity > 0.01
+-                readonly property bool hot: card.pointerOver(shut)
+-                Behavior on opacity { NumberAnimation { duration: card.fade; easing.type: Easing.InOutQuad } }
+-
+-                Text {
+-                  id: closeMark
+-                  anchors.centerIn: parent
+-                  textFormat: Text.PlainText
+-                  text: "✕"
+-                  color: shut.hot ? Commons.Color.notifications.text : card.dimColor
+-                  font.pixelSize: Math.round(Style.font.caption * 1.44)
+-                }
+-
+-                MouseArea {
+-                  anchors.fill: parent
+-                  anchors.margins: -Style.space(3)
+-                  cursorShape: Qt.PointingHandCursor
+-                  onClicked: card.dismissed()
+-                }
+-              }
++            Text {
++              textFormat: Text.PlainText
++              id: stamp
++              text: card.ago()
++              color: card.dimColor
++              visible: text.length > 0
++              font.family: Style.font.family
++              font.pixelSize: Style.font.bodySmall
+             }
+           }
+         }
+@@ -524,6 +503,52 @@
+       }
+     }
+ 
++    Rectangle {
++      id: closeDivider
++      anchors.top: parent.top
++      anchors.topMargin: plate.borderTop
++      anchors.bottom: parent.bottom
++      anchors.bottomMargin: plate.borderBottom + deedArea.height + replyArea.height
++      anchors.right: shut.left
++      width: 1
++      color: deedArea.ruleColor
++    }
++
++    Item {
++      id: shut
++      objectName: "toastCloseBox"
++      anchors.top: parent.top
++      anchors.topMargin: plate.borderTop
++      anchors.bottom: closeDivider.bottom
++      anchors.right: parent.right
++      anchors.rightMargin: plate.borderRight
++      width: body.closeZoneWidth
++      readonly property bool hot: card.pointerOver(shut) || closeMouse.pressed
++
++      Rectangle {
++        anchors.fill: parent
++        color: closeMouse.pressed ? Style.pressedFillFor(Commons.Color.notifications.text, Commons.Color.accent)
++             : shut.hot ? Style.hoverFillFor(Commons.Color.notifications.text, Commons.Color.accent)
++             : "transparent"
++      }
++
++      Text {
++        id: closeMark
++        anchors.centerIn: parent
++        textFormat: Text.PlainText
++        text: "✕"
++        color: shut.hot ? Commons.Color.notifications.text : card.dimColor
++        font.pixelSize: Math.round(Style.font.title * 1.15)
++      }
++
++      MouseArea {
++        id: closeMouse
++        anchors.fill: parent
++        cursorShape: Qt.PointingHandCursor
++        onClicked: card.dismissed()
++      }
++    }
++
+     // The buttons, as a bar along the card's bottom edge: a hairline above,
+     // equal segments split by hairlines, three to a line, and a short last line
+     // stretched across. Drawn in the card because the surface is clipped. In

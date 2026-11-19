@@ -647,9 +647,21 @@ Item {
   // height free here instead: the drawer's dockHeight, nothing while the
   // on-screen keyboard (which covers the dock) is up, and the same formula
   // as the launcher's when the drawer is out of reach.
+  property int deviceSafeInsetBottom: 0
+  FileView {
+    path: "/usr/share/omamobile/device.conf"
+    blockLoading: true
+    printErrors: false
+    onLoaded: {
+      var m = String(text() || "").match(/^SAFE_INSET_BOTTOM=([0-9]+)$/m)
+      root.deviceSafeInsetBottom = m ? parseInt(m[1], 10) || 0 : 0
+    }
+  }
+  readonly property int safeInsetBottom: Math.max(0, (Quickshell.env("OMAMOBILE_SAFE_INSET_BOTTOM") || "") !== ""
+    ? (parseInt(Quickshell.env("OMAMOBILE_SAFE_INSET_BOTTOM"), 10) || 0) : deviceSafeInsetBottom)
   readonly property int dockInset: drawer && drawer.dockHeight !== undefined
     ? (drawer.oskOpen ? 0 : drawer.dockHeight)
-    : Math.max(48, Style.space(48)) + Style.spacing.xxl * 2
+    : Math.max(48, Style.space(48)) + Style.spacing.xxl * 2 + safeInsetBottom
 
   // The pages are being swiped, or slide to a page: the neighbours show too.
   readonly property bool pagesMoving: !!pager && pager.swiping
@@ -1517,12 +1529,13 @@ Item {
     // no blur or shadow, to keep the 120 Hz panel smooth. Its corners are
     // Omarchy's (Style.cornerRadius, Hyprland's rounding: square by
     // default, as the lock, the shade and the keypad), not a rounding of
-    // our own.
+    // our own. Clock widgets are transparent by default like the lock screen.
+    readonly property bool transparentCard: cell.isWidget && cell.modelData.type === "clock" && (!cell.modelData.config || cell.modelData.config.transparent !== false)
     Rectangle {
       id: card
       anchors.fill: parent
       anchors.margins: root.gap
-      visible: cell.isWidget
+      visible: cell.isWidget && !cell.transparentCard
       radius: Style.cornerRadius
       color: root.cardColor
     }

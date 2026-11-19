@@ -217,8 +217,21 @@ Item {
   readonly property bool hasBattery: !!battery && battery.isPresent === true
   readonly property int batteryPercent: hasBattery ? Math.round(battery.percentage * 100) : -1
   readonly property bool charging: hasBattery && battery.state === UPowerDeviceState.Charging
+  readonly property bool plugged: hasBattery && (charging || !UPower.onBattery)
   readonly property string batteryIcon: StatusModel.batteryIcon(batteryPercent, charging,
-    hasBattery && battery.state === UPowerDeviceState.FullyCharged)
+    hasBattery && battery.state === UPowerDeviceState.FullyCharged, plugged)
+  property int deviceSafeInsetX: 0
+  FileView {
+    path: "/usr/share/omamobile/device.conf"
+    blockLoading: true
+    printErrors: false
+    onLoaded: {
+      var m = String(text() || "").match(/^SAFE_INSET_X=([0-9]+)$/m)
+      root.deviceSafeInsetX = m ? parseInt(m[1], 10) || 0 : 0
+    }
+  }
+  readonly property int safeInsetX: Math.max(0, (Quickshell.env("OMAMOBILE_SAFE_INSET_X") || "") !== ""
+    ? (parseInt(Quickshell.env("OMAMOBILE_SAFE_INSET_X"), 10) || 0) : deviceSafeInsetX)
 
   // ---------------------------------------------------------------- host API
 
@@ -291,8 +304,8 @@ Item {
       Item {
         z: 1
         anchors.fill: parent
-        anchors.leftMargin: Style.spacing.huge
-        anchors.rightMargin: Style.spacing.huge
+        anchors.leftMargin: Math.max(Style.spacing.huge, root.safeInsetX)
+        anchors.rightMargin: Math.max(Style.spacing.huge, root.safeInsetX)
 
         Text {
           id: clockText

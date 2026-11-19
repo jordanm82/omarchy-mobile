@@ -13,6 +13,7 @@ for script in build install bin/* test/*; do
   bash -n "$script" || fail "$script parses"
 done
 sh -n uwsm/env.d/omamobile-caiman-graphics || fail "uwsm env.d parses as POSIX shell"
+sh -n uwsm/env.d/omamobile-caiman-display || fail "uwsm display env.d parses as POSIX shell"
 pass "scripts parse"
 
 grep -q '\.\./\.\.' build install && fail "build or install reaches outside the package directory"
@@ -101,6 +102,7 @@ for f in usr/bin/reboot-to \
          usr/lib/systemd/system/omamobile-caiman-aoc.service \
          usr/lib/systemd/system/omamobile-caiman-graphics.service \
          usr/share/uwsm/env.d/omamobile-caiman-graphics \
+         usr/share/uwsm/env.d/omamobile-caiman-display \
          usr/share/wireplumber/wireplumber.conf.d/50-omamobile-cameras.conf \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-caiman/version \
@@ -131,8 +133,8 @@ for hook in omamobile-caiman-cpuidle omamobile-caiman-nfc omamobile-caiman-wifi;
   [[ -x $tmp/root/usr/lib/systemd/system-sleep/$hook ]] \
     || fail "$hook sleep hook must be executable"
 done
-[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 45 ]] \
-  || fail "install stages expected 45 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
+[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 46 ]] \
+  || fail "install stages expected 46 paths: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
 grep -qx 'Environment=OMAMOBILE_MODEM_GNSS=1' \
   "$tmp/root/usr/lib/systemd/system/omamobile-modem.service.d/20-gnss.conf" \
   || fail "modem GNSS drop-in missing"

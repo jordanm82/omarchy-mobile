@@ -136,13 +136,13 @@ function unreadStored(text, seen) {
   return count
 }
 
-function batteryIcon(percent, charging, full) {
+function batteryIcon(percent, charging, full, plugged) {
   if (percent < 0) return ""
-  if (full) return "󰁹"
+  if (full) return plugged ? "󰂅" : "󰁹"
   var chargingIcons = ["󰢜", "󰂆", "󰂇", "󰂈", "󰢝", "󰂉", "󰢞", "󰂊", "󰂋", "󰂅"]
   var defaultIcons = ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"]
   var index = Math.max(0, Math.min(9, Math.floor(percent / 10)))
-  return charging ? chargingIcons[index] : defaultIcons[index]
+  return (charging || plugged) ? chargingIcons[index] : defaultIcons[index]
 }
 
 if (typeof module !== "undefined") {

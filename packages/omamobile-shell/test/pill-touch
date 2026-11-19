@@ -93,6 +93,8 @@ Item {
   // The state the bottom windows follow, set by the tests, and what each
   // reserves at the bottom edge (an exclusive zone), from Launcher.qml.
   readonly property int dockHeight: 96
+  readonly property int safeInsetX: 0
+  readonly property int safeInsetBottom: 0
   property bool appOnScreen: false
   property bool opened: false
   property bool oskOpen: false

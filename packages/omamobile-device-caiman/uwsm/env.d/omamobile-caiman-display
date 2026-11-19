@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Safe display corner insets in logical pixels for Google Pixel 9 Pro (caiman):
+# its curved display corners clip top bar status text and the bottom search pill
+# without horizontal and bottom clearance.
+export OMAMOBILE_SAFE_INSET_X=34
+export OMAMOBILE_SAFE_INSET_BOTTOM=18

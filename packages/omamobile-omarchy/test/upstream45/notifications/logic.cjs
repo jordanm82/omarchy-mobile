@@ -372,7 +372,7 @@ function newCapacityScope() {
     hyprRevision: 0,
     displayNames: ['fixture-display'], focusedDisplayName: 'fixture-display',
     Quickshell: { screens: [] }, Hyprland: { monitorFor: screen => screen.monitor },
-    lowDuration: 5000, normalDuration: 8000, maxDuration: 30000,
+    lowDuration: 5000, normalDuration: 8000, criticalDuration: 15000, maxDuration: 30000,
     Security: S, Delivery, Store, Markup: M,
     NotificationUrgency: { Critical: 2, Normal: 1, Low: 0 },
     Qt: { callLater: f => later.push(f),
@@ -771,7 +771,7 @@ for (const holding of [false, true]) { // Silencing closes a muted update; only 
   n.replace({ urgency: 2 })
   s.drainCallLater()
   assert.equal(s.toasts.get(0).urgency, 2)
-  assert.equal(s.toasts.get(0).duration, 0)
+  assert.equal(s.toasts.get(0).duration, 15000)
   n.replace({ hints: { 'sender-pid': 1234 } })
   s.drainCallLater()
   assert.equal(s.toasts.get(0).senderPid, 1234)
